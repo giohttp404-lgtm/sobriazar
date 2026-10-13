@@ -493,6 +493,18 @@
 
   async function send() {
     const text = q.value.trim();
+    const sw = text.match(/^(?:ok(?:ay)?\s+|please\s+)?(?:use|switch to|go back to|back to|change to)\s+(claude|gemini|google|muse|meta|best|auto|all)[.!]?$/i);
+    if (sw && !S.files.length) {
+      const m = { claude: "claude", gemini: "gemini", google: "gemini", muse: "muse", meta: "muse", best: "best", auto: "auto", all: "all" }[sw[1].toLowerCase()];
+      const name = { claude: "C", gemini: "G", muse: "M", best: "Best", auto: "Auto", all: "All" }[m];
+      q.value = ""; grow();
+      if (m === "muse" && !S.keys.muse) { toast("M isn't set up yet."); return; }
+      if (S.priv && OFF_PRIVATE.includes(m)) { toast(`Private is on, so ${name} is off. Turn off Private first.`); return; }
+      S.mode = m; local.set("mode", m); renderMode();
+      toast(`Switched to ${name}.`);
+      if (voice.turn || voice.followUp) { voice.turn = false; speak(`Okay, using ${{ C: "Claude", G: "Gemini", M: "Muse" }[name] || name}.`); }
+      return;
+    }
     if (S.busy || (!text && !S.files.length)) return;
     const mode = effectiveMode();
     const files = S.files.map((f) => f.payload);

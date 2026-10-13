@@ -319,13 +319,31 @@ function parseFiles(m) {
 
 async function ask(request, env) {
   const body = await request.json();
-  const text = String(body.text || "").trim();
+  let text = String(body.text || "").trim();
+  const rawText = text;
+  // Spoken or typed source requests: "use Claude ...", "ask Gemini: ...", "... using Muse".
+  let asked = null;
+  const SRC = { claude: "claude", gemini: "gemini", google: "gemini", muse: "muse", meta: "muse", best: "best" };
+  const lead = text.match(/^(?:hey\s+|ok(?:ay)?\s+|please\s+)?(?:use|ask|with|using|try)\s+(claude|gemini|google|muse|meta|best)\b[\s,.:;!-]*/i);
+  const tail = !lead && text.match(/[\s,.;-]+(?:use|ask|using|with)\s+(claude|gemini|google|muse|meta|best)[.!]?$/i);
+  if (lead || tail) {
+    const m = lead || tail;
+    asked = SRC[m[1].toLowerCase()];
+    body.asked = asked;
+    text = (lead ? text.slice(m[0].length) : text.slice(0, m.index)).trim();
+  }
   const files = Array.isArray(body.files) ? body.files.slice(0, 10) : [];
   let priv = Boolean(body.private);
   let mode = body.mode === "both" ? "all" : body.mode;
   if (!["auto", "gemini", "claude", "muse", "best", "all"].includes(mode)) mode = "auto";
+  let askedNote = null;
+  if (asked) {
+    if (asked === "muse" && !env.META_API_KEY) { askedNote = "M isn't set up, so C answered"; asked = "claude"; }
+    if (priv && (asked === "gemini" || asked === "muse")) { askedNote = "Private is on, so C answered"; asked = "claude"; }
+    mode = asked;
+  }
   if (priv && mode !== "claude" && mode !== "best" && mode !== "auto") mode = "claude";
-  if (!text && !files.length) throw httpError(400, "Type something or attach a file.");
+  if (!text && !files.length) throw httpError(400, asked ? "Say what you want to ask after the name, like \u201cuse Claude, write an email to my principal.\u201d" : "Type something or attach a file.");
 
   const now = Date.now();
   let threadId = body.threadId;
@@ -345,9 +363,9 @@ async function ask(request, env) {
   }
 
   const fileNames = files.map((f) => ({ name: String(f.name || "file").slice(0, 120), type: String(f.type || "") }));
-  const userMsg = { id: uid(), role: "user", engine: null, content: text, files: fileNames, created: now };
+  const userMsg = { id: uid(), role: "user", engine: null, content: rawText, files: fileNames, created: now };
   await env.DB.prepare("INSERT INTO messages (id, thread_id, role, engine, content, files, created) VALUES (?, ?, 'user', NULL, ?, ?, ?)")
-    .bind(userMsg.id, threadId, text, JSON.stringify(fileNames), now).run();
+    .bind(userMsg.id, threadId, rawText, JSON.stringify(fileNames), now).run();
 
   const turn = { text, files };
   const jobs = [];
@@ -355,6 +373,11 @@ async function ask(request, env) {
   const tz = validTz(body.tz);
   let route = null, search = false;
   let useAccounts = accounts.length > 0 && body.useAccounts !== false && (body.useAccounts === true || wantsAccounts(text));
+  if (asked && (asked === "gemini" || asked === "muse") && useAccounts && body.useAccounts !== true) {
+    // A plain "use Gemini" question that only mentions days/today shouldn't pull in personal data.
+    useAccounts = /\b(calendar|schedule|meeting|my day|email|inbox|gmail|drive|my tasks|to-?dos?)\b/i.test(text);
+    if (useAccounts) askedNote = "your accounts only go to C";
+  }
   if (mode === "auto") {
     route = await autoRoute(env, { text, files, history, priv, hasAccounts: accounts.length > 0, forceAccounts: body.useAccounts === true });
     mode = route.mode; useAccounts = route.accounts; search = route.search;
@@ -383,6 +406,7 @@ async function ask(request, env) {
     const content = ok ? (typeof val === "string" ? val : val.text) : `⚠ ${r.reason?.message || "No answer came back."}`;
     const used = ok && typeof val === "object" && val.used?.length ? val.used.map((n) => ({ name: n, used: true })) : [];
     if (route) used.unshift({ route: route.accounts && !used.length ? route.label.replace("Your accounts", "Answer") : route.label });
+    else if (asked) used.unshift({ route: askedNote ? `You asked for ${{ gemini: "G", claude: "C", muse: "M", best: "Best" }[body.asked || asked] || "it"} · ${askedNote}` : `You asked for ${{ gemini: "G", claude: "C", muse: "M", best: "Best" }[asked]}` });
     const msg = { id: uid(), role: ok ? "assistant" : "error", engine, content, files: used, created: Date.now() + i };
     replies.push(msg);
     stmts.push(env.DB.prepare("INSERT INTO messages (id, thread_id, role, engine, content, files, created) VALUES (?, ?, ?, ?, ?, ?, ?)")
