@@ -265,6 +265,31 @@ body.chatting .convo { display: block; flex: 1 1 auto; }
 
 .drop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(6,7,10,.8); border: 2px dashed var(--dim); font: 14px var(--mono); letter-spacing: .16em; text-transform: uppercase; }
 
+/* ---------- shortcut editor ---------- */
+.edit-skills { margin: 0 0 0 auto; text-transform: none; letter-spacing: .04em; }
+.skills-strip .skill.edit { color: var(--dim); border-style: dashed; }
+.sheet {
+  width: min(640px, calc(100vw - 24px)); max-height: calc(100dvh - 40px); padding: 0; border: 1px solid var(--line-hi);
+  border-radius: 14px; background: var(--panel); color: var(--fg);
+}
+.sheet::backdrop { background: rgba(3, 4, 6, .72); }
+.sheet form { display: flex; flex-direction: column; gap: 14px; padding: 18px; max-height: calc(100dvh - 42px); }
+.sheet-head, .sheet-foot, .sheet-opts, .sheet-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.sheet-note { margin: 0; color: var(--dim); font-size: 13px; }
+.skill-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; overflow-y: auto; min-height: 0; flex: 1; }
+.skill-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; padding: 10px; border: 1px solid var(--line); border-radius: 8px; background: var(--void); }
+.skill-row .fields { display: grid; gap: 6px; min-width: 0; }
+.skill-row input, .skill-row textarea {
+  width: 100%; background: var(--panel); border: 1px solid var(--line); border-radius: 6px; padding: 7px 9px; font-size: 14px;
+}
+.skill-row input { font-family: var(--mono); font-size: 13px; }
+.skill-row textarea { resize: vertical; min-height: 54px; line-height: 1.45; }
+.skill-row .uses { font: 10.5px var(--mono); color: var(--faint); }
+.skill-row .tools { display: flex; flex-direction: column; gap: 4px; }
+.skill-row .tools button { width: 32px; height: 30px; padding: 0; }
+.skill-row .tools .del { color: var(--warn); }
+.sheet-err { color: var(--warn); font-size: 13px; margin: 0; min-height: 1em; flex: 1; }
+
 /* ---------- fold / tablet ---------- */
 @media (max-width: 1180px) {
   .app { grid-template-columns: minmax(0, 1fr) 300px; grid-template-areas: "center side"; }

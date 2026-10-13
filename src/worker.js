@@ -60,6 +60,7 @@ async function route(request, env, url) {
   if (path === "/api/state" && method === "GET") return state(env);
   if (path === "/api/ask" && method === "POST") return ask(request, env);
   if (path === "/api/settings" && method === "PUT") return saveSettings(request, env);
+  if (path === "/api/skills/use" && method === "POST") return useSkill(request, env);
 
   let m;
   if ((m = path.match(/^\/api\/threads\/([\w-]+)$/))) {
@@ -185,6 +186,9 @@ async function state(env) {
     threads: threads.results,
     todos: todos.results,
     notes: s.notes || "",
+    skills: s.skills ? JSON.parse(s.skills) : null,
+    skillUses: s.skill_uses ? JSON.parse(s.skill_uses) : {},
+    skillSort: s.skill_sort || "used",
     budget: Number(s.budget || 5),
     usage: {
       month,
@@ -201,12 +205,39 @@ async function saveSettings(request, env) {
   const body = await request.json();
   const stmts = [];
   if ("notes" in body) stmts.push(env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('notes', ?)").bind(String(body.notes).slice(0, 50000)));
+  if ("skills" in body) {
+    if (body.skills === null) stmts.push(env.DB.prepare("DELETE FROM settings WHERE key = 'skills'"));
+    else {
+      if (!Array.isArray(body.skills)) throw httpError(400, "Shortcuts must be a list.");
+      const clean = body.skills.slice(0, 40).map((k) => ({
+        id: String(k.id || uid()).slice(0, 64),
+        name: String(k.name || "").trim().slice(0, 40),
+        prompt: String(k.prompt || "").trim().slice(0, 2000),
+      })).filter((k) => k.name && k.prompt);
+      stmts.push(env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('skills', ?)").bind(JSON.stringify(clean)));
+    }
+  }
+  if ("skillSort" in body) {
+    const v = body.skillSort === "mine" ? "mine" : "used";
+    stmts.push(env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('skill_sort', ?)").bind(v));
+  }
   if ("budget" in body) {
     const b = Math.max(0, Math.min(1000, Number(body.budget) || 0));
     stmts.push(env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('budget', ?)").bind(String(b)));
   }
   if (stmts.length) await env.DB.batch(stmts);
   return json({ ok: true });
+}
+
+async function useSkill(request, env) {
+  const body = await request.json();
+  const id = String(body.id || "").slice(0, 64);
+  if (!id) throw httpError(400, "Missing shortcut.");
+  const row = await env.DB.prepare("SELECT value FROM settings WHERE key = 'skill_uses'").first();
+  const uses = row ? JSON.parse(row.value) : {};
+  uses[id] = (uses[id] || 0) + 1;
+  await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES ('skill_uses', ?)").bind(JSON.stringify(uses)).run();
+  return json({ uses });
 }
 
 async function getThread(env, id) {

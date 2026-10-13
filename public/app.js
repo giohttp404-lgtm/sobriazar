@@ -8,22 +8,23 @@
     set(k, v) { try { localStorage.setItem("sz_" + k, JSON.stringify(v)); } catch {} },
   };
 
-  const SKILLS = [
-    ["Plan today", "Help me plan my day as a simple time-blocked list. Here's what I have going on:"],
-    ["Simplify", "Rewrite this so a 7th grader can understand it. Keep the key ideas and vocabulary:"],
-    ["Exit ticket", "Write a short R.A.C.E. exit ticket (one question plus a model answer showing Restate, Answer, Cite, Explain) based on this:"],
-    ["Summarize", "Summarize this in 3–5 clear bullet points:"],
-    ["Quiz", "Write 5 multiple-choice questions with an answer key based on this:"],
-    ["Tiered", "Rewrite this at three levels — below grade level, on grade level, and above grade level:"],
-    ["Email", "Write a short, friendly, professional email about this:"],
-    ["Spanish", "Translate this into clear, natural Spanish:"],
+  const DEFAULT_SKILLS = [
+    { id: "plan", name: "Plan today", prompt: "Help me plan my day as a simple time-blocked list. Here's what I have going on:" },
+    { id: "simplify", name: "Simplify", prompt: "Rewrite this so a 7th grader can understand it. Keep the key ideas and vocabulary:" },
+    { id: "exit", name: "Exit ticket", prompt: "Write a short R.A.C.E. exit ticket (one question plus a model answer showing Restate, Answer, Cite, Explain) based on this:" },
+    { id: "summary", name: "Summarize", prompt: "Summarize this in 3–5 clear bullet points:" },
+    { id: "quiz", name: "Quiz", prompt: "Write 5 multiple-choice questions with an answer key based on this:" },
+    { id: "tiered", name: "Tiered", prompt: "Rewrite this at three levels — below grade level, on grade level, and above grade level:" },
+    { id: "email", name: "Email", prompt: "Write a short, friendly, professional email about this:" },
+    { id: "spanish", name: "Spanish", prompt: "Translate this into clear, natural Spanish:" },
   ];
   const LABELS = { gemini: ["G", "g", "Result · G"], claude: ["C", "c", "Result · C"], best: ["★", "best", "Best result"] };
   const MAX_BYTES = 18 * 1024 * 1024;
 
   const S = {
     threads: [], todos: [], currentId: null, messages: [], mode: local.get("mode", "gemini"),
-    priv: local.get("priv", false), files: [], busy: false, notesDirty: false, budget: 5, lastSync: 0,
+    priv: local.get("priv", false), files: [],
+    skills: local.get("skills", null) || DEFAULT_SKILLS, skillUses: local.get("skillUses", {}), skillSort: local.get("skillSort", "used"), busy: false, notesDirty: false, budget: 5, lastSync: 0,
   };
 
   /* ---------------- api ---------------- */
@@ -67,6 +68,11 @@
     showApp();
     S.threads = st.threads; S.todos = st.todos; S.budget = st.budget; S.lastSync = Date.now();
     if (!S.notesDirty && document.activeElement !== $("#notes")) $("#notes").value = st.notes;
+    if (!$("#skillDlg").open) {
+      S.skills = st.skills || DEFAULT_SKILLS; S.skillUses = st.skillUses || {}; S.skillSort = st.skillSort || "used";
+      local.set("skills", S.skills); local.set("skillUses", S.skillUses); local.set("skillSort", S.skillSort);
+      renderSkills();
+    }
     renderUsage(st.usage); renderHistory(); renderTodos();
     if (first) {
       const last = local.get("thread", null);
@@ -150,18 +156,94 @@
   });
 
   /* ---------------- skills ---------------- */
-  function useSkill(prefix) {
+  function orderedSkills() {
+    const list = S.skills.map((k, i) => ({ ...k, i }));
+    if (S.skillSort === "used") list.sort((a, b) => (S.skillUses[b.id] || 0) - (S.skillUses[a.id] || 0) || a.i - b.i);
+    return list;
+  }
+  function renderSkills() {
+    const list = orderedSkills();
+    [$("#skills"), $("#skillsStrip")].forEach((box) => {
+      box.innerHTML = "";
+      list.forEach((k) => {
+        const b = document.createElement("button"); b.type = "button"; b.className = "skill"; b.textContent = k.name;
+        b.title = k.prompt;
+        b.onclick = () => runSkill(k);
+        box.appendChild(b);
+      });
+    });
+    const edit = document.createElement("button"); edit.type = "button"; edit.className = "skill edit"; edit.textContent = "Edit";
+    edit.onclick = openSkillEditor; $("#skillsStrip").appendChild(edit);
+  }
+  function runSkill(k) {
+    S.skillUses[k.id] = (S.skillUses[k.id] || 0) + 1; local.set("skillUses", S.skillUses);
+    api("/skills/use", { method: "POST", body: { id: k.id } }).catch(() => {});
     const q = $("#q"); const text = q.value.trim();
     setView("ask");
-    if (text || S.files.length) { q.value = prefix + "\n\n" + text; grow(); send(); }
-    else { q.value = prefix + "\n\n"; grow(); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+    if (text || S.files.length) { q.value = k.prompt + "\n\n" + text; grow(); send(); }
+    else { q.value = k.prompt + "\n\n"; grow(); q.focus(); q.setSelectionRange(q.value.length, q.value.length); }
+    // Re-sort after a short pause so the button doesn't jump out from under your finger.
+    if (S.skillSort === "used") setTimeout(renderSkills, 1200);
   }
-  [$("#skills"), $("#skillsStrip")].forEach((box) => {
-    SKILLS.forEach(([name, prefix]) => {
-      const b = document.createElement("button"); b.type = "button"; b.className = "skill"; b.textContent = name;
-      b.onclick = () => useSkill(prefix); box.appendChild(b);
+
+  /* shortcut editor */
+  let draft = [], draftSort = "used";
+  function openSkillEditor() {
+    draft = S.skills.map((k) => ({ ...k })); draftSort = S.skillSort;
+    $("#skillErr").textContent = "";
+    renderDraft(); $("#skillDlg").showModal();
+  }
+  function renderDraft() {
+    $$("#skillDlg [data-sort]").forEach((b) => b.setAttribute("aria-pressed", String(b.dataset.sort === draftSort)));
+    const ol = $("#skillRows"); ol.innerHTML = "";
+    draft.forEach((k, i) => {
+      const li = document.createElement("li"); li.className = "skill-row";
+      const n = S.skillUses[k.id] || 0;
+      li.innerHTML = `<div class="fields">
+          <label class="sr" for="sk-name-${i}">Button name</label>
+          <input id="sk-name-${i}" maxlength="40" placeholder="Button name">
+          <label class="sr" for="sk-prompt-${i}">Instruction</label>
+          <textarea id="sk-prompt-${i}" maxlength="2000" rows="2" placeholder="What should it do? e.g. Rewrite this as a measurable IEP goal:"></textarea>
+          <span class="uses">${n ? `Used ${n} time${n === 1 ? "" : "s"}` : "Not used yet"}</span>
+        </div>
+        <div class="tools">
+          <button class="btn icon" type="button" data-a="up" aria-label="Move up" ${i === 0 ? "disabled" : ""}>↑</button>
+          <button class="btn icon" type="button" data-a="down" aria-label="Move down" ${i === draft.length - 1 ? "disabled" : ""}>↓</button>
+          <button class="btn icon del" type="button" data-a="del" aria-label="Delete shortcut">×</button>
+        </div>`;
+      const [nameIn, promptIn] = [li.querySelector("input"), li.querySelector("textarea")];
+      nameIn.value = k.name; promptIn.value = k.prompt;
+      nameIn.oninput = () => (k.name = nameIn.value);
+      promptIn.oninput = () => (k.prompt = promptIn.value);
+      li.querySelector('[data-a="up"]').onclick = () => { [draft[i - 1], draft[i]] = [draft[i], draft[i - 1]]; renderDraft(); };
+      li.querySelector('[data-a="down"]').onclick = () => { [draft[i + 1], draft[i]] = [draft[i], draft[i + 1]]; renderDraft(); };
+      li.querySelector('[data-a="del"]').onclick = () => { draft.splice(i, 1); renderDraft(); };
+      ol.appendChild(li);
     });
-  });
+  }
+  $$("#skillDlg [data-sort]").forEach((b) => (b.onclick = () => { draftSort = b.dataset.sort; renderDraft(); }));
+  $("#addSkill").onclick = () => {
+    draft.push({ id: "s" + Date.now().toString(36), name: "", prompt: "" }); renderDraft();
+    const rows = $$("#skillRows .skill-row"); const last = rows[rows.length - 1];
+    last.scrollIntoView({ block: "nearest" }); last.querySelector("input").focus();
+  };
+  $("#resetSkills").onclick = () => { draft = DEFAULT_SKILLS.map((k) => ({ ...k })); renderDraft(); };
+  $("#saveSkills").onclick = async () => {
+    const clean = draft.map((k) => ({ id: k.id, name: k.name.trim(), prompt: k.prompt.trim() }));
+    const half = clean.find((k) => !k.name !== !k.prompt);
+    if (half) { $("#skillErr").textContent = "Each shortcut needs both a button name and an instruction."; return; }
+    const keep = clean.filter((k) => k.name && k.prompt);
+    if (!keep.length) { $("#skillErr").textContent = "Keep at least one shortcut, or tap Reset."; return; }
+    $("#saveSkills").disabled = true;
+    try {
+      await api("/settings", { method: "PUT", body: { skills: keep, skillSort: draftSort } });
+      S.skills = keep; S.skillSort = draftSort; local.set("skills", keep); local.set("skillSort", draftSort);
+      renderSkills(); $("#skillDlg").close();
+    } catch (err) { $("#skillErr").textContent = err.message; }
+    finally { $("#saveSkills").disabled = false; }
+  };
+  $$(".edit-skills").forEach((b) => (b.onclick = openSkillEditor));
+  renderSkills();
 
   /* ---------------- history ---------------- */
   function ago(ts) {

@@ -137,7 +137,7 @@
   <!-- RIGHT: skills + history -->
   <aside class="col right" aria-label="Skills and history">
     <section class="panel">
-      <h2 class="label">Skills <span>quick access</span></h2>
+      <h2 class="label">Skills <span>quick access</span><button class="link small edit-skills" type="button">Edit</button></h2>
       <div class="skills" id="skills"></div>
     </section>
     <section class="panel grow">
@@ -154,6 +154,32 @@
     <button type="button" data-view="tasks"><svg viewBox="0 0 24 24"><path d="m5 12 4 4 10-10"/></svg>Tasks</button>
   </nav>
 </div>
+
+<dialog class="sheet" id="skillDlg" aria-labelledby="skillDlgTitle">
+  <form method="dialog" id="skillEditForm">
+    <header class="sheet-head">
+      <h2 id="skillDlgTitle" class="wordmark sm">Shortcuts</h2>
+      <button class="btn ghost" value="cancel" type="submit">Close</button>
+    </header>
+    <div class="sheet-opts">
+      <span class="eyebrow">Order</span>
+      <div class="seg" role="group" aria-label="Order">
+        <button type="button" data-sort="used">Most used first</button>
+        <button type="button" data-sort="mine">My order</button>
+      </div>
+    </div>
+    <p class="sheet-note">Each shortcut adds its instruction in front of what you type or paste. Use the arrows to set "My order".</p>
+    <ol class="skill-rows" id="skillRows"></ol>
+    <div class="sheet-actions">
+      <button class="btn" type="button" id="addSkill">+ Add shortcut</button>
+      <button class="link small" type="button" id="resetSkills">Reset to the original 8</button>
+    </div>
+    <footer class="sheet-foot">
+      <p class="sheet-err" id="skillErr" role="alert"></p>
+      <button class="btn primary" type="button" id="saveSkills">Save</button>
+    </footer>
+  </form>
+</dialog>
 
 <div class="drop" id="drop" hidden><span>Drop files to attach</span></div>
 
