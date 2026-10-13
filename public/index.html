@@ -4,7 +4,8 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
 <title>Sobriazar</title>
-<meta name="theme-color" content="#07080b">
+<meta name="theme-color" content="#08090d">
+<link rel="preload" as="image" href="/phoenix.webp" type="image/webp">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
@@ -14,7 +15,7 @@
 <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@300;500;600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@600;800&family=Saira+Condensed:wght@300;500;600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
 <link rel="stylesheet" href="/styles.css">
 </head>
 <body data-view="ask">
@@ -23,7 +24,8 @@
 <section id="login" class="login" hidden>
   <canvas class="login-core" id="loginCore" aria-hidden="true"></canvas>
   <form id="loginForm" class="login-card">
-    <h1 class="wordmark">SOBRIAZAR</h1>
+    <img class="login-phoenix" src="/phoenix-sm.webp" alt="" width="440" height="286">
+    <h1 class="brandmark">SOBRIAZAR</h1>
     <p class="eyebrow">Sign in to continue</p>
     <label class="sr" for="pw">Password</label>
     <input id="pw" type="password" autocomplete="current-password" placeholder="Password" required>
@@ -37,7 +39,7 @@
   <!-- LEFT: status, tasks, notes -->
   <aside class="col left" aria-label="Status and tasks">
     <div class="brand">
-      <div class="wordmark sm">SOBRIAZAR</div>
+      <div class="brandmark sm">SOBRIAZAR</div>
       <div class="eyebrow">Command center</div>
     </div>
 
@@ -106,6 +108,7 @@
   <!-- CENTER: core + conversation -->
   <main class="col center">
     <header class="topbar">
+      <div class="top-name brandmark sm" aria-hidden="true">SOBRIAZAR</div>
       <div class="status-line" id="statusLine"><span class="pip"></span> CORE · IDLE <span class="sep">·</span> SYNCED</div>
       <div class="top-actions">
         <button class="btn ghost" id="newChat" type="button">+ New</button>
@@ -116,8 +119,9 @@
 
     <div class="core-wrap" id="coreWrap">
       <canvas id="core" aria-hidden="true"></canvas>
+      <img class="phoenix" id="phoenix" src="/phoenix.webp" alt="" width="1100" height="715">
       <div class="core-name">
-        <div class="wordmark xl">SOBRIAZAR</div>
+        <div class="brandmark xl">SOBRIAZAR</div>
         <div class="core-state" id="coreState">Ready</div>
       </div>
     </div>

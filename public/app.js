@@ -703,26 +703,30 @@
     setTimeout(() => { t.remove(); if (!S.messages.length && !box.children.length) document.body.classList.remove("chatting"); }, 6000);
   }
 
-  /* ---------------- galaxy ---------------- */
+  /* ---------------- embers (behind the phoenix) ---------------- */
   function Galaxy(canvas) {
     const ctx = canvas.getContext("2d");
     const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const TINTS = { gemini: [141, 182, 255], claude: [242, 176, 124], best: [143, 227, 180], muse: [196, 168, 255], all: [223, 230, 255] };
-    let stars = [], w = 0, h = 0, dpr = 1, raf = 0, running = false, t = 0;
-    let speed = 1, targetSpeed = 1, glow = 0, targetGlow = 0, tint = TINTS.gemini, tintNow = [...TINTS.gemini];
+    const TINTS = { gemini: [111, 190, 255], claude: [255, 140, 90], muse: [190, 150, 255], best: [120, 230, 180], all: [200, 220, 255] };
+    const RED = [255, 74, 60], BLUE = [90, 210, 255];
+    let w = 0, h = 0, dpr = 1, raf = 0, running = false, last = 0;
+    let parts = [], busy = false, energy = 0, tint = TINTS.gemini, tintNow = [...TINTS.gemini];
 
-    function build() {
-      const small = Math.min(w, h) < 400 || matchMedia("(max-width: 760px)").matches;
-      const n = small ? 1500 : 3400;
-      const arms = 3; stars = [];
-      for (let i = 0; i < n; i++) {
-        const core = Math.random() < 0.18;
-        const r = core ? Math.pow(Math.random(), 2) * 0.22 : 0.08 + Math.pow(Math.random(), 0.8) * 0.92;
-        const arm = (i % arms) * ((Math.PI * 2) / arms);
-        const spread = (core ? 2.4 : 0.55) * (1 - r * 0.4) * (Math.random() - 0.5);
-        stars.push({ r, a: arm + r * 5.2 + spread, s: Math.random() * 1.5 + 0.6, b: Math.random() * 0.6 + 0.55, tw: Math.random() * 6.28 });
-      }
+    function spawn(initial) {
+      const compact = document.body.classList.contains("chatting") && canvas.id === "core";
+      const cx = w / 2, spreadX = Math.min(w * (compact ? 0.18 : 0.34), compact ? 160 : 420);
+      const blue = Math.random() < 0.5;
+      return {
+        x: cx + (Math.random() - 0.5) * 2 * spreadX * (blue ? (Math.random() < 0.5 ? 1 : 0.6) : 1) + (blue ? spreadX * 0.25 : -spreadX * 0.25) * Math.random(),
+        y: initial ? Math.random() * h : h * (0.55 + Math.random() * 0.5),
+        vx: (Math.random() - 0.5) * 0.25,
+        vy: -(0.25 + Math.random() * 0.7),
+        r: 0.6 + Math.random() * 1.8,
+        life: 0, max: 220 + Math.random() * 260,
+        col: blue ? BLUE : RED, tw: Math.random() * 6.28,
+      };
     }
+    function count() { const small = w < 500; return (small ? 45 : 95) * (busy ? 1.8 : 1); }
     function resize() {
       const rect = canvas.getBoundingClientRect();
       if (!rect.width || !rect.height) return;
@@ -731,42 +735,49 @@
       if (nw === w && nh === h) return;
       w = nw; h = nh; canvas.width = w * dpr; canvas.height = h * dpr;
       ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-      build(); if (!running) frame(true);
+      parts = Array.from({ length: Math.round(count()) }, () => spawn(true));
+      if (!running) frame(performance.now(), true);
     }
-    function frame(once) {
-      speed += (targetSpeed - speed) * 0.04; glow += (targetGlow - glow) * 0.05;
+    function frame(now, once) {
+      const dt = Math.min(3, (now - (last || now)) / 16.7); last = now;
+      energy += ((busy ? 1 : 0) - energy) * 0.05;
       for (let k = 0; k < 3; k++) tintNow[k] += (tint[k] - tintNow[k]) * 0.05;
-      t += reduced ? 0 : 0.0016 * speed;
       ctx.clearRect(0, 0, w, h);
-      const compact = document.body.classList.contains("chatting");
-      const cx = w / 2, cy = compact ? h * 0.34 : h * 0.46;
-      const R = compact ? Math.min(w * 0.3, h * 0.32) : Math.min(w * 0.42, h * 0.5);
-      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, R * (0.45 + glow * 0.25));
+      const compact = document.body.classList.contains("chatting") && canvas.id === "core";
+      const cx = w / 2, cy = canvas.id === "core" ? h * (compact ? 0.5 : 0.42) : h * 0.4;
+      const R = Math.min(w, h) * (compact ? 0.5 : 0.48);
+      const pulse = reduced ? 0 : 0.5 + 0.5 * Math.sin(now / (busy ? 260 : 1600));
       const [tr, tg, tb] = tintNow.map(Math.round);
-      g.addColorStop(0, `rgba(${tr},${tg},${tb},${0.16 + glow * 0.18})`); g.addColorStop(1, "rgba(0,0,0,0)");
+      const g = ctx.createRadialGradient(cx, cy, 0, cx, cy, R);
+      g.addColorStop(0, `rgba(${tr},${tg},${tb},${0.10 + 0.06 * pulse + energy * 0.14})`);
+      g.addColorStop(0.55, `rgba(255,74,60,${0.04 + energy * 0.06})`);
+      g.addColorStop(1, "rgba(0,0,0,0)");
       ctx.fillStyle = g; ctx.fillRect(0, 0, w, h);
       ctx.globalCompositeOperation = "lighter";
-      for (const st of stars) {
-        const ang = st.a + t * (1.6 / (0.25 + st.r));
-        const x = cx + Math.cos(ang) * st.r * R;
-        const y = cy + Math.sin(ang) * st.r * R * 0.82;
-        const twinkle = 0.75 + 0.25 * Math.sin(t * 40 + st.tw);
-        const alpha = Math.min(1, st.b * twinkle * (1.15 - st.r * 0.55) * (1 + glow * 0.5));
-        const mix = Math.max(0, 1 - st.r * 1.6);
-        const cr = Math.round(tr + (255 - tr) * mix), cg = Math.round(tg + (255 - tg) * mix), cb = Math.round(tb + (255 - tb) * mix);
-        ctx.fillStyle = `rgba(${cr},${cg},${cb},${alpha})`;
-        const s = st.s * (st.r < 0.15 ? 1.3 : 1);
-        ctx.fillRect(x, y, s, s);
+      const speed = reduced ? 0 : (1 + energy * 2.2) * dt;
+      while (parts.length < count()) parts.push(spawn(false));
+      for (let i = parts.length - 1; i >= 0; i--) {
+        const p = parts[i];
+        p.life += speed; p.x += (p.vx + Math.sin((p.life + p.tw * 40) / 40) * 0.15) * speed; p.y += p.vy * speed;
+        const fade = Math.min(1, p.life / 30) * Math.max(0, 1 - p.life / p.max);
+        if (p.life > p.max || p.y < -10) { if (parts.length > count()) parts.splice(i, 1); else parts[i] = spawn(false); continue; }
+        const flick = 0.7 + 0.3 * Math.sin(p.life / 6 + p.tw);
+        const a = fade * flick * (0.55 + energy * 0.4);
+        const [r, gg, b] = p.col;
+        ctx.fillStyle = `rgba(${r},${gg},${b},${a * 0.18})`;
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.r * 3.2, 0, 6.283); ctx.fill();
+        ctx.fillStyle = `rgba(${Math.min(255, r + 60)},${Math.min(255, gg + 60)},${Math.min(255, b + 60)},${a})`;
+        ctx.beginPath(); ctx.arc(p.x, p.y, p.r, 0, 6.283); ctx.fill();
       }
       ctx.globalCompositeOperation = "source-over";
-      if (!once && running) raf = requestAnimationFrame(() => frame());
+      if (!once && running) raf = requestAnimationFrame((t) => frame(t));
     }
     return {
-      start() { if (running) return; running = true; resize(); frame(); },
+      start() { if (running) return; running = true; resize(); last = 0; raf = requestAnimationFrame((t) => frame(t)); },
       stop() { running = false; cancelAnimationFrame(raf); },
       resize() { requestAnimationFrame(resize); setTimeout(resize, 450); },
-      setBusy(b, mode) { targetSpeed = b ? 4.5 : 1; targetGlow = b ? 1 : 0; if (mode) tint = TINTS[mode] || tint; },
-      setTint(mode) { tint = TINTS[mode] || TINTS.gemini; if (!running) frame(true); },
+      setBusy(b, mode) { busy = b; document.body.classList.toggle("busy", b); if (mode && TINTS[mode]) tint = TINTS[mode]; },
+      setTint(mode) { tint = TINTS[mode] || TINTS.gemini; },
     };
   }
   const galaxyMain = Galaxy($("#core"));
