@@ -1,0 +1,6 @@
+# The password you'll type to sign in to Sobriazar on each device.
+APP_PASSWORD=
+# Your Gemini key from aistudio.google.com/apikey
+GEMINI_API_KEY=
+# Your Claude key from the Claude Console (API Keys page)
+ANTHROPIC_API_KEY=

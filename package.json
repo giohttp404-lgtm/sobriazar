@@ -1,0 +1,22 @@
+{
+  "name": "sobriazar",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "wrangler dev",
+    "deploy": "wrangler deploy"
+  },
+  "devDependencies": {
+    "wrangler": "4.142.0"
+  },
+  "cloudflare": {
+    "label": "Sobriazar",
+    "products": ["Workers", "D1"],
+    "bindings": {
+      "APP_PASSWORD": { "description": "Make up a password. You'll type it once on each device to sign in." },
+      "GEMINI_API_KEY": { "description": "Paste your Gemini key from aistudio.google.com/apikey." },
+      "ANTHROPIC_API_KEY": { "description": "Paste your Claude key from the Claude Console, API Keys page." }
+    }
+  }
+}

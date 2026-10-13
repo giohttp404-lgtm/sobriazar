@@ -1,0 +1,162 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<title>Sobriazar</title>
+<meta name="theme-color" content="#07080b">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Sobriazar">
+<link rel="manifest" href="/manifest.webmanifest">
+<link rel="icon" href="/icons/icon-192.png">
+<link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Saira+Condensed:wght@300;500;600&family=IBM+Plex+Mono:wght@400;500&family=IBM+Plex+Sans:wght@400;500;600&display=swap">
+<link rel="stylesheet" href="/styles.css">
+</head>
+<body data-view="ask">
+
+<!-- Sign-in -->
+<section id="login" class="login" hidden>
+  <canvas class="login-core" id="loginCore" aria-hidden="true"></canvas>
+  <form id="loginForm" class="login-card">
+    <h1 class="wordmark">SOBRIAZAR</h1>
+    <p class="eyebrow">Sign in to continue</p>
+    <label class="sr" for="pw">Password</label>
+    <input id="pw" type="password" autocomplete="current-password" placeholder="Password" required>
+    <button type="submit" class="btn primary">Enter</button>
+    <p class="login-err" id="loginErr" role="alert"></p>
+  </form>
+</section>
+
+<div class="app" id="app" hidden>
+
+  <!-- LEFT: status, tasks, notes -->
+  <aside class="col left" aria-label="Status and tasks">
+    <div class="brand">
+      <div class="wordmark sm">SOBRIAZAR</div>
+      <div class="eyebrow">Command center</div>
+    </div>
+
+    <section class="panel">
+      <h2 class="label">Usage <span>this month</span></h2>
+      <div class="meter-card">
+        <div class="meter-top">
+          <span class="dot c">C</span>
+          <span class="big" id="cCost">$0.00</span>
+          <span class="of">of <button class="link" id="budgetBtn" type="button">$5</button> credit</span>
+        </div>
+        <div class="meter" aria-hidden="true"><i id="cBar"></i></div>
+        <div class="ticks" aria-hidden="true"><span>0</span><span>25</span><span>50</span><span>75</span><span>100</span></div>
+        <form class="budget-edit" id="budgetForm" hidden>
+          <label for="budgetIn">Credit you added ($)</label>
+          <input id="budgetIn" type="number" min="0" step="1" inputmode="decimal">
+          <button class="btn" type="submit">Save</button>
+        </form>
+      </div>
+      <div class="stat-row">
+        <span class="dot g">G</span>
+        <span><b id="gToday">0</b> today · free</span>
+        <span class="muted" id="cReq">0 C requests</span>
+      </div>
+    </section>
+
+    <section class="panel">
+      <h2 class="label">Directives <span id="taskCount"></span></h2>
+      <form id="todoForm" class="todo-add">
+        <label class="sr" for="todoIn">New task</label>
+        <input id="todoIn" placeholder="Add a task" autocomplete="off" maxlength="500">
+        <button class="btn icon" type="submit" aria-label="Add task">+</button>
+      </form>
+      <ul class="todos" id="todos"></ul>
+      <button class="link small" id="clearDone" type="button" hidden>Clear finished</button>
+    </section>
+
+    <section class="panel grow">
+      <h2 class="label">Notes <span id="noteState">synced</span></h2>
+      <label class="sr" for="notes">Notes</label>
+      <textarea id="notes" class="notes" placeholder="Anything you want on every device…"></textarea>
+    </section>
+  </aside>
+
+  <!-- CENTER: core + conversation -->
+  <main class="col center">
+    <header class="topbar">
+      <div class="status-line" id="statusLine"><span class="pip"></span> CORE · IDLE <span class="sep">·</span> SYNCED</div>
+      <div class="top-actions">
+        <button class="btn ghost" id="newChat" type="button">+ New</button>
+        <button class="btn ghost" id="logout" type="button">Sign out</button>
+      </div>
+      <div class="clock" id="clock" aria-hidden="true"><span class="hm">00:00</span><span class="s">:00</span><span class="date"></span></div>
+    </header>
+
+    <div class="core-wrap" id="coreWrap">
+      <canvas id="core" aria-hidden="true"></canvas>
+      <div class="core-name">
+        <div class="wordmark xl">SOBRIAZAR</div>
+        <div class="core-state" id="coreState">Ready</div>
+      </div>
+    </div>
+
+    <div class="skills-strip" id="skillsStrip" aria-label="Shortcuts"></div>
+
+    <div class="convo" id="convo" aria-live="polite"></div>
+
+    <form class="composer" id="composer">
+      <div class="files" id="fileChips"></div>
+      <div class="compose-row">
+        <label class="btn icon attach" title="Attach files">
+          <input type="file" id="fileIn" multiple accept=".pdf,.png,.jpg,.jpeg,.webp,.gif,.heic,.docx,.txt,.md,.csv,image/*,application/pdf" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M21 12.5 12.6 21a5.5 5.5 0 0 1-7.8-7.8l8.9-8.9a3.7 3.7 0 0 1 5.2 5.2l-8.9 8.9a1.8 1.8 0 0 1-2.6-2.6l8.2-8.2"/></svg>
+          <span class="sr">Attach files</span>
+        </label>
+        <label class="sr" for="q">Ask anything</label>
+        <textarea id="q" rows="1" placeholder="Ask, paste, or drop a file…" autocomplete="off"></textarea>
+        <button class="send" id="send" type="submit" aria-label="Send">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+        </button>
+      </div>
+      <div class="compose-opts">
+        <div class="seg" role="group" aria-label="Source">
+          <button type="button" data-mode="gemini" title="G only (free)">G</button>
+          <button type="button" data-mode="claude" title="C only">C</button>
+          <button type="button" data-mode="best" title="G drafts, C polishes">Best</button>
+          <button type="button" data-mode="both" title="Both side by side">Both</button>
+        </div>
+        <button type="button" class="lock" id="privBtn" aria-pressed="false" title="Student info: keep it off G">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>
+          <span>Private</span>
+        </button>
+      </div>
+    </form>
+  </main>
+
+  <!-- RIGHT: skills + history -->
+  <aside class="col right" aria-label="Skills and history">
+    <section class="panel">
+      <h2 class="label">Skills <span>quick access</span></h2>
+      <div class="skills" id="skills"></div>
+    </section>
+    <section class="panel grow">
+      <h2 class="label">History <span id="histCount"></span></h2>
+      <label class="sr" for="histSearch">Search history</label>
+      <input id="histSearch" class="search" placeholder="Search history" autocomplete="off">
+      <ul class="history" id="history"></ul>
+    </section>
+  </aside>
+
+  <nav class="tabbar" aria-label="Sections">
+    <button type="button" data-view="ask"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/></svg>Ask</button>
+    <button type="button" data-view="history"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>History</button>
+    <button type="button" data-view="tasks"><svg viewBox="0 0 24 24"><path d="m5 12 4 4 10-10"/></svg>Tasks</button>
+  </nav>
+</div>
+
+<div class="drop" id="drop" hidden><span>Drop files to attach</span></div>
+
+<script src="/app.js"></script>
+</body>
+</html>
