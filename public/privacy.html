@@ -1,0 +1,46 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Sobriazar Privacy</title>
+<link rel="icon" href="/icons/icon-192.png">
+<style>
+:root { --bg:#08090d; --fg:#e8eaf0; --dim:#8a91a2; --line:#222632; --ice:#6fdcff; }
+html,body { margin:0; background:var(--bg); color:var(--fg); }
+body { font: 16px/1.65 "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding-inline:16px; }
+main { max-width: 680px; margin: 0 auto; padding-block: 48px 72px; }
+h1 { font: 700 30px/1.2 Georgia, serif; letter-spacing:.04em; margin:0 0 6px; text-wrap: balance; }
+h2 { font-size: 18px; margin: 32px 0 8px; }
+p, li { color: #cfd3dc; }
+.meta { color: var(--dim); font-size: 14px; margin: 0 0 28px; padding-bottom: 18px; border-bottom: 1px solid var(--line); }
+a { color: var(--ice); }
+</style>
+</head>
+<body><main>
+<h1>Sobriazar Privacy Policy</h1>
+<p class="meta">Last updated October 13, 2026 · Contact: giohttp404@gmail.com</p>
+<p>Sobriazar is a personal assistant app built and used by one person, its owner. It is not offered to the public. This page explains what it does with Google account data when the owner connects an account.</p>
+
+<h2>What Sobriazar accesses</h2>
+<ul>
+<li><b>Google Calendar (read-only):</b> event times, titles and locations, to answer questions like "what's on my day."</li>
+<li><b>Gmail (read and compose):</b> searching and reading messages to summarize them, and creating drafts. Sobriazar never sends email; drafts wait for the owner to review and send.</li>
+<li><b>Google Drive (only chosen files):</b> files the owner picks with the Drive picker, and documents Sobriazar creates in its own "Sobriazar" folder. It cannot see the rest of Drive.</li>
+<li><b>Basic profile:</b> the account's email address, to label which account is connected.</li>
+</ul>
+
+<h2>How the data is used</h2>
+<p>Data is only read when the owner asks a question that needs it. The relevant parts are sent to the AI service that writes the answer (Anthropic's Claude) and the answer is shown to the owner. Google data is never sent to other AI services used by the app.</p>
+<p>Sobriazar's use of information received from Google APIs adheres to the <a href="https://developers.google.com/terms/api-services-user-data-policy">Google API Services User Data Policy</a>, including the Limited Use requirements. Google data is not sold, not used for advertising, not shared with anyone else, and not used to train AI models.</p>
+
+<h2>What is stored</h2>
+<ul>
+<li>Sign-in tokens for connected accounts, encrypted, in the app's private database on Cloudflare.</li>
+<li>The owner's conversation history, tasks, notes and the list of picked Drive files, in the same database.</li>
+</ul>
+<p>Email bodies, calendar events and file contents are not stored separately; they appear only inside answers the owner chose to keep in history.</p>
+
+<h2>Removing access</h2>
+<p>Disconnecting an account in Sobriazar deletes its stored tokens and file list and revokes access. Access can also be removed at any time at <a href="https://myaccount.google.com/permissions">myaccount.google.com/permissions</a>.</p>
+</main></body></html>
