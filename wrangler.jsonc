@@ -21,9 +21,8 @@
     "CLAUDE_FAST_MODEL": "claude-haiku-5-5",
     "CLAUDE_BEST_MODEL": "claude-sonnet-5-5",
     "MUSE_MODEL": "muse-spark-1.3",
-    "GOOGLE_CLIENT_ID": "",
-    "GOOGLE_API_KEY": "",
-    "GOOGLE_PROJECT_NUMBER": ""
+    "GOOGLE_CLIENT_ID": "237428159843-l9d1sqok5484fu28ir99u9fee9e1j4ai.apps.googleusercontent.com",
+    "GOOGLE_PROJECT_NUMBER": "237428159843"
   },
   "observability": { "enabled": true },
   "keep_vars": true

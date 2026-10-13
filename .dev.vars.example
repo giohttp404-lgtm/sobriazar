@@ -8,3 +8,5 @@ ANTHROPIC_API_KEY=
 META_API_KEY=
 # Google sign-in (Calendar, Gmail, Drive): the OAuth client secret from Google Cloud
 GOOGLE_CLIENT_SECRET=
+# Google Picker browser key (restricted to the Picker API and this site)
+GOOGLE_API_KEY=
