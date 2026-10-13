@@ -12,12 +12,26 @@
   },
   "cloudflare": {
     "label": "Sobriazar",
-    "products": ["Workers", "D1"],
+    "products": [
+      "Workers",
+      "D1"
+    ],
     "bindings": {
-      "APP_PASSWORD": { "description": "Make up a password. You'll type it once on each device to sign in." },
-      "GEMINI_API_KEY": { "description": "Paste your Gemini key from aistudio.google.com/apikey." },
-      "ANTHROPIC_API_KEY": { "description": "Paste your Claude key from the Claude Console, API Keys page." },
-      "META_API_KEY": { "description": "Optional. Paste your Meta Model API key from dev.meta.ai to add the M source." }
+      "APP_PASSWORD": {
+        "description": "Make up a password. You'll type it once on each device to sign in."
+      },
+      "GEMINI_API_KEY": {
+        "description": "Paste your Gemini key from aistudio.google.com/apikey."
+      },
+      "ANTHROPIC_API_KEY": {
+        "description": "Paste your Claude key from the Claude Console, API Keys page."
+      },
+      "META_API_KEY": {
+        "description": "Optional. Paste your Meta Model API key from dev.meta.ai to add the M source."
+      }
     }
+  },
+  "dependencies": {
+    "@simplewebauthn/server": "14.0.3"
   }
 }

@@ -78,6 +78,9 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .login-card .brandmark { font-size: 32px; }
 .login-card input { background: var(--panel); border: 1px solid var(--line-hi); border-radius: 8px; padding: 11px 12px; text-align: center; font-family: var(--mono); }
 .login-card .btn { padding: 11px; }
+.pk-btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; }
+.pk-btn svg { width: 20px; height: 20px; }
+.or { margin: 0; color: var(--faint); font: 11px var(--mono); letter-spacing: .12em; text-transform: uppercase; }
 .login-err { color: var(--warn); font-size: 13px; min-height: 1.2em; margin: 0; }
 
 /* ---------- app grid ---------- */
@@ -314,6 +317,23 @@ body.chatting .convo { display: block; flex: 1 1 auto; }
   background: var(--raise); border: 1px solid var(--line-hi); border-radius: 10px; padding: 10px 14px; font-size: 13.5px;
   max-width: min(520px, calc(100vw - 32px)); box-shadow: 0 8px 30px rgba(0,0,0,.5);
 }
+
+/* ---------- security & voice ---------- */
+.switch { display: flex; gap: 10px; align-items: flex-start; font-size: 13.5px; padding: 5px 0; cursor: pointer; }
+.switch input { appearance: none; flex: none; width: 34px; height: 20px; border-radius: 999px; background: var(--raise); border: 1px solid var(--line-hi); position: relative; cursor: pointer; margin: 0; transition: background .2s; }
+.switch input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--dim); transition: transform .2s, background .2s; }
+.switch input:checked { background: rgba(111, 220, 255, .25); border-color: var(--ice); }
+.switch input:checked::after { transform: translateX(14px); background: var(--ice); }
+.mic { color: var(--dim); border-radius: 50%; background: transparent; border-color: var(--line); }
+.mic:hover { color: var(--fg); }
+.mic.on { color: var(--void); background: var(--ember); border-color: var(--ember); animation: blink 1.2s infinite; }
+.voice-bar {
+  position: fixed; left: 50%; transform: translateX(-50%); bottom: calc(96px + env(safe-area-inset-bottom, 0px)); z-index: 55;
+  display: flex; align-items: center; gap: 10px; background: var(--raise); border: 1px solid var(--line-hi); border-radius: 999px; padding: 6px 8px 6px 14px;
+  font: 12px var(--mono); color: var(--dim); box-shadow: 0 8px 30px rgba(0,0,0,.5); max-width: calc(100vw - 32px);
+}
+.voice-bar .wave { width: 8px; height: 8px; border-radius: 50%; background: var(--ice); box-shadow: 0 0 10px var(--ice); animation: blink 1s infinite; }
+.toast .act { margin-left: 8px; }
 
 /* ---------- shortcut editor ---------- */
 .edit-skills { margin: 0 0 0 auto; text-transform: none; letter-spacing: .04em; }

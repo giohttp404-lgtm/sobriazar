@@ -1,4 +1,5 @@
 // Sobriazar server: login, synced history, and the calls to Gemini, Claude and Muse.
+import { LOCK_SCHEMA, awakeCookie, clearAwake, isAwake, listPasskeys, registerOptions, registerVerify, loginOptions, loginVerify, deletePasskey } from "./lock.js";
 import { GOOGLE_SCHEMA, TOOLS, TOOL_LABELS, googleReady, startConnect, finishConnect, listAccounts, disconnect, pickerConfig, listLibrary, addToLibrary, removeFromLibrary, runTool, saveDoc, wantsAccounts } from "./google.js";
 // Keys live only here, as Cloudflare secrets. They never reach the browser.
 
@@ -33,10 +34,16 @@ export default {
     if (!url.pathname.startsWith("/api/")) return env.ASSETS.fetch(request);
     try {
       if (!schemaReady) {
-        await env.DB.batch([...SCHEMA, ...GOOGLE_SCHEMA].map((s) => env.DB.prepare(s)));
+        await env.DB.batch([...SCHEMA, ...GOOGLE_SCHEMA, ...LOCK_SCHEMA].map((s) => env.DB.prepare(s)));
         schemaReady = true;
       }
-      return await route(request, env, url);
+      const res = await route(request, env, url);
+      // Real activity keeps Sobriazar unlocked for another 5 minutes; background syncs don't.
+      if (!res.headers.has("x-sz-awake")) return res;
+      const out = new Response(res.body, res);
+      out.headers.delete("x-sz-awake");
+      if (!request.headers.get("x-sz-bg")) out.headers.append("Set-Cookie", await awakeCookie(env));
+      return out;
     } catch (err) {
       return json({ error: err.message || "Something went wrong on the server." }, err.status || 500);
     }
@@ -51,15 +58,40 @@ async function route(request, env, url) {
 
   if (path === "/api/login" && method === "POST") return login(request, env);
   if (path === "/api/google/callback" && method === "GET") return finishConnect(env, url);
-  if (path === "/api/logout" && method === "POST") return json({ ok: true }, 200, { "Set-Cookie": cookie("", 0) });
+  if (path === "/api/logout" && method === "POST") {
+    const r = json({ ok: true }); r.headers.append("Set-Cookie", cookie("", 0)); r.headers.append("Set-Cookie", clearAwake); return r;
+  }
 
   if (!env.APP_PASSWORD) throw httpError(500, "The APP_PASSWORD secret isn't set in Cloudflare yet.");
   if (!(await validSession(request, env))) return json({ error: "Please sign in." }, 401);
-  if (path === "/api/google/start" && method === "GET") return startConnect(env, url);
   if (method !== "GET" && !(request.headers.get("content-type") || "").includes("application/json")) {
     throw httpError(415, "Requests must be JSON.");
   }
 
+  // Unlocking with Face ID / fingerprint (device already signed in, just locked).
+  if (path === "/api/lock" && method === "POST") return json({ ok: true }, 200, { "Set-Cookie": clearAwake });
+  if (path === "/api/passkey/login/options" && method === "POST") return json(await loginOptions(env, url));
+  if (path === "/api/passkey/login/verify" && method === "POST") {
+    await loginVerify(env, url, await request.json());
+    return json({ ok: true }, 200, { "Set-Cookie": await awakeCookie(env) });
+  }
+
+  if (!(await isAwake(request, env))) return json({ error: "Locked.", locked: true }, 423);
+  const AW = { "x-sz-awake": "1" };
+  if (path === "/api/google/start" && method === "GET") return startConnect(env, url);
+
+  if (path === "/api/passkey/register/options" && method === "POST") return json(await registerOptions(env, url), 200, AW);
+  if (path === "/api/passkey/register/verify" && method === "POST") return json(await registerVerify(env, url, await request.json()), 200, AW);
+  if (path === "/api/passkeys" && method === "GET") return json({ passkeys: await listPasskeys(env) }, 200, AW);
+  let pm;
+  if ((pm = path.match(/^\/api\/passkeys\/(.+)$/)) && method === "DELETE") { await deletePasskey(env, decodeURIComponent(pm[1])); return json({ ok: true }, 200, AW); }
+
+  const res = await routeApp(request, env, url, path, method);
+  res.headers.set("x-sz-awake", "1");
+  return res;
+}
+
+async function routeApp(request, env, url, path, method) {
   if (path === "/api/state" && method === "GET") return state(env);
   if (path === "/api/ask" && method === "POST") return ask(request, env);
   if (path === "/api/settings" && method === "PUT") return saveSettings(request, env);
@@ -160,7 +192,10 @@ async function login(request, env) {
   await env.DB.prepare("DELETE FROM login_attempts WHERE ip = ?").bind(ip).run();
   const exp = now + SESSION_DAYS * 864e5;
   const token = `${exp}.${await sign(env, String(exp))}`;
-  return json({ ok: true }, 200, { "Set-Cookie": cookie(token, SESSION_DAYS * 86400) });
+  const r = json({ ok: true });
+  r.headers.append("Set-Cookie", cookie(token, SESSION_DAYS * 86400));
+  r.headers.append("Set-Cookie", await awakeCookie(env));
+  return r;
 }
 
 function cookie(value, maxAge) {

@@ -26,7 +26,12 @@
   <form id="loginForm" class="login-card">
     <img class="login-phoenix" src="/phoenix-sm.webp" alt="" width="440" height="286">
     <h1 class="brandmark">SOBRIAZAR</h1>
-    <p class="eyebrow">Sign in to continue</p>
+    <p class="eyebrow" id="loginSub">Sign in to continue</p>
+    <button type="button" class="btn primary pk-btn" id="pkBtn" hidden>
+      <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M7 3H5a2 2 0 0 0-2 2v2M17 3h2a2 2 0 0 1 2 2v2M7 21H5a2 2 0 0 1-2-2v-2M17 21h2a2 2 0 0 0 2-2v-2M9 9v1M15 9v1M12 9v4h-1M9 16c1.6 1.2 4.4 1.2 6 0"/></svg>
+      Unlock with Face ID or fingerprint
+    </button>
+    <p class="or" id="pkOr" hidden>or use your password</p>
     <label class="sr" for="pw">Password</label>
     <input id="pw" type="password" autocomplete="current-password" placeholder="Password" required>
     <button type="submit" class="btn primary">Enter</button>
@@ -87,6 +92,23 @@
       <button class="btn" type="button" id="addDrive">+ Add from Drive</button>
     </section>
 
+    <section class="panel" id="securityPanel">
+      <h2 class="label">Security <span>locks after 5 idle min</span></h2>
+      <p class="hint" id="pkStatus">Face ID or fingerprint unlock isn't set up on this device.</p>
+      <div class="acct-actions">
+        <button class="btn" type="button" id="pkSetup">Set up Face ID or fingerprint</button>
+        <button class="btn ghost" type="button" id="lockNow">Lock now</button>
+      </div>
+      <ul class="accts" id="pkList"></ul>
+    </section>
+
+    <section class="panel" id="voicePanel">
+      <h2 class="label">Voice <span>glasses</span></h2>
+      <label class="switch"><input type="checkbox" id="speakToggle"><span>Read answers out loud</span></label>
+      <label class="switch"><input type="checkbox" id="glassesToggle"><span>Glasses mode: tap your glasses to talk</span></label>
+      <p class="hint" id="voiceHint">Connect your glasses to this phone by Bluetooth, then tap the mic or your glasses and speak.</p>
+    </section>
+
     <section class="panel">
       <h2 class="label">Directives <span id="taskCount"></span></h2>
       <form id="todoForm" class="todo-add">
@@ -140,6 +162,9 @@
         </label>
         <label class="sr" for="q">Ask anything</label>
         <textarea id="q" rows="1" placeholder="Ask, paste, or drop a file…" autocomplete="off"></textarea>
+        <button class="btn icon mic" id="micBtn" type="button" aria-label="Talk" title="Talk" hidden>
+          <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="3" width="6" height="11" rx="3"/><path d="M5 11a7 7 0 0 0 14 0M12 18v3"/></svg>
+        </button>
         <button class="send" id="send" type="submit" aria-label="Send">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
         </button>
@@ -208,6 +233,7 @@
 </dialog>
 
 <div class="toast" id="toast" role="status" hidden></div>
+<div class="voice-bar" id="voiceBar" hidden><span class="wave"></span><span id="voiceText">Listening…</span><button class="act" type="button" id="voiceStop">Stop</button></div>
 
 <div class="drop" id="drop" hidden><span>Drop files to attach</span></div>
 

@@ -34,22 +34,31 @@
   async function api(path, opts = {}) {
     const r = await fetch("/api" + path, {
       method: opts.method || "GET",
-      headers: opts.body ? { "content-type": "application/json" } : {},
+      headers: { ...(opts.body ? { "content-type": "application/json" } : {}), ...(opts.bg ? { "x-sz-bg": "1" } : {}) },
       body: opts.body ? JSON.stringify(opts.body) : undefined,
       credentials: "same-origin",
     });
     const j = await r.json().catch(() => ({}));
-    if (r.status === 401 && path !== "/login") { showLogin(); throw new Error(j.error || "Please sign in."); }
+    if (r.status === 401 && path !== "/login" && !path.startsWith("/passkey/login")) { showLogin(); throw new Error(j.error || "Please sign in."); }
+    if (r.status === 423) { showLock(); const e = new Error("Locked."); e.locked = true; throw e; }
     if (!r.ok) throw new Error(j.error || `Something went wrong (${r.status}).`);
     return j;
   }
 
   /* ---------------- login ---------------- */
-  function showLogin() {
+  function showLogin(locked) {
+    stopVoice();
     $("#app").hidden = true; $("#login").hidden = false;
+    document.body.classList.toggle("is-locked", Boolean(locked));
+    $("#loginSub").textContent = locked ? "Locked after 5 idle minutes" : "Sign in to continue";
+    const pk = Boolean(locked && local.get("pkSet", false) && window.PublicKeyCredential);
+    $("#pkBtn").hidden = !pk; $("#pkOr").hidden = !pk;
+    $("#loginErr").textContent = "";
     galaxyLogin.start(); galaxyMain.stop();
-    setTimeout(() => $("#pw").focus(), 50);
+    if (pk && !showLogin.autoTried) { showLogin.autoTried = true; setTimeout(unlockWithPasskey, 250); }
+    else setTimeout(() => { if (!pk) $("#pw").focus(); }, 50);
   }
+  function showLock() { if (!$("#login").hidden && document.body.classList.contains("is-locked")) return; showLogin.autoTried = false; showLogin(true); }
   function showApp() {
     $("#login").hidden = true; $("#app").hidden = false; requestAnimationFrame(grow);
     galaxyLogin.stop(); galaxyMain.start();
@@ -59,15 +68,121 @@
     $("#loginErr").textContent = "";
     try {
       await api("/login", { method: "POST", body: { password: $("#pw").value } });
-      $("#pw").value = ""; showApp(); await sync(true);
+      $("#pw").value = ""; markActive(); showApp(); await sync(true);
+      offerPasskey();
     } catch (err) { $("#loginErr").textContent = err.message; }
   });
   $("#logout").onclick = async () => { try { await api("/logout", { method: "POST" }); } catch {} showLogin(); };
 
+  /* ---------------- idle lock ---------------- */
+  const IDLE_MS = 5 * 60 * 1000;
+  let lastActive = Date.now();
+  function markActive() { lastActive = Date.now(); }
+  ["pointerdown", "keydown", "wheel", "touchstart", "input"].forEach((ev) => window.addEventListener(ev, markActive, { passive: true, capture: true }));
+  async function lockNow() {
+    try { await api("/lock", { method: "POST", body: {} }); } catch {}
+    showLock();
+  }
+  setInterval(() => { if (!$("#app").hidden && !S.busy && !voice.active && Date.now() - lastActive > IDLE_MS) lockNow(); }, 15000);
+  document.addEventListener("visibilitychange", () => {
+    if (!document.hidden && !$("#app").hidden && Date.now() - lastActive > IDLE_MS) lockNow();
+  });
+
+  /* ---------------- passkeys (Face ID / fingerprint) ---------------- */
+  const b64u = {
+    toBuf: (s) => { const b = atob(s.replace(/-/g, "+").replace(/_/g, "/") + "===".slice((s.length + 3) % 4)); return Uint8Array.from(b, (c) => c.charCodeAt(0)).buffer; },
+    fromBuf: (buf) => { let s = ""; new Uint8Array(buf).forEach((b) => (s += String.fromCharCode(b))); return btoa(s).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, ""); },
+  };
+  async function platformAvailable() {
+    try { return Boolean(window.PublicKeyCredential && (await PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable())); } catch { return false; }
+  }
+  function deviceName() {
+    const ua = navigator.userAgent;
+    if (/iPhone/.test(ua)) return "iPhone";
+    if (/Android/.test(ua)) return /SM-|Galaxy/i.test(ua) ? "Galaxy phone" : /moto|razr/i.test(ua) ? "Razr" : "Android phone";
+    if (/Macintosh/.test(ua)) return "Mac";
+    return "This device";
+  }
+  async function setupPasskey() {
+    try {
+      const o = await api("/passkey/register/options", { method: "POST", body: {} });
+      const cred = await navigator.credentials.create({ publicKey: {
+        ...o, challenge: b64u.toBuf(o.challenge), user: { ...o.user, id: b64u.toBuf(o.user.id) },
+        excludeCredentials: (o.excludeCredentials || []).map((c) => ({ ...c, id: b64u.toBuf(c.id) })),
+      } });
+      const r = cred.response;
+      await api("/passkey/register/verify", { method: "POST", body: { name: deviceName(), response: {
+        id: cred.id, rawId: b64u.fromBuf(cred.rawId), type: cred.type, clientExtensionResults: cred.getClientExtensionResults(),
+        authenticatorAttachment: cred.authenticatorAttachment,
+        response: { clientDataJSON: b64u.fromBuf(r.clientDataJSON), attestationObject: b64u.fromBuf(r.attestationObject), transports: r.getTransports ? r.getTransports() : [] },
+      } } });
+      local.set("pkSet", true); toast("Face ID / fingerprint unlock is on for this device."); renderSecurity();
+    } catch (err) {
+      if (err.name === "InvalidStateError") { local.set("pkSet", true); toast("This device already has Face ID / fingerprint unlock."); renderSecurity(); return; }
+      if (err.name !== "NotAllowedError") toast(err.message || "Couldn't set up Face ID / fingerprint.");
+    }
+  }
+  async function unlockWithPasskey() {
+    $("#loginErr").textContent = "";
+    try {
+      const o = await api("/passkey/login/options", { method: "POST", body: {} });
+      const cred = await navigator.credentials.get({ publicKey: {
+        ...o, challenge: b64u.toBuf(o.challenge), allowCredentials: (o.allowCredentials || []).map((c) => ({ ...c, id: b64u.toBuf(c.id) })),
+      } });
+      const r = cred.response;
+      await api("/passkey/login/verify", { method: "POST", body: { response: {
+        id: cred.id, rawId: b64u.fromBuf(cred.rawId), type: cred.type, clientExtensionResults: cred.getClientExtensionResults(),
+        authenticatorAttachment: cred.authenticatorAttachment,
+        response: { clientDataJSON: b64u.fromBuf(r.clientDataJSON), authenticatorData: b64u.fromBuf(r.authenticatorData), signature: b64u.fromBuf(r.signature), userHandle: r.userHandle ? b64u.fromBuf(r.userHandle) : undefined },
+      } } });
+      markActive(); document.body.classList.remove("is-locked"); showApp(); await sync(true);
+    } catch (err) {
+      if (err.name === "NotAllowedError") $("#loginErr").textContent = "Face ID was cancelled. Tap the button to try again, or use your password.";
+      else $("#loginErr").textContent = err.message || "Couldn't unlock. Use your password.";
+    }
+  }
+  $("#pkBtn").onclick = unlockWithPasskey;
+  $("#pkSetup").onclick = setupPasskey;
+  $("#lockNow").onclick = lockNow;
+  async function renderSecurity() {
+    const ok = await platformAvailable();
+    const on = local.get("pkSet", false);
+    $("#pkSetup").hidden = !ok || on;
+    $("#pkStatus").textContent = !ok ? "This browser can't use Face ID or fingerprint, so unlock uses your password."
+      : on ? "Face ID or fingerprint unlock is on for this device." : "Face ID or fingerprint unlock isn't set up on this device.";
+    try {
+      const { passkeys } = await api("/passkeys", { bg: true });
+      const ul = $("#pkList"); ul.innerHTML = "";
+      passkeys.forEach((p) => {
+        const li = document.createElement("li");
+        li.innerHTML = `<span class="acct-dot"></span><span class="em"></span><button class="x" type="button" aria-label="Remove">×</button>`;
+        li.querySelector(".em").textContent = `${p.name} · added ${new Date(p.created).toLocaleDateString(undefined, { month: "short", day: "numeric" })}`;
+        const x = li.querySelector(".x");
+        x.onclick = async () => {
+          if (!x.classList.contains("confirm")) { x.classList.add("confirm"); x.textContent = "Remove?"; setTimeout(() => { x.classList.remove("confirm"); x.textContent = "×"; }, 3000); return; }
+          try { await api(`/passkeys/${encodeURIComponent(p.id)}`, { method: "DELETE" }); toast(`Removed ${p.name}.`); renderSecurity(); } catch (err) { toast(err.message); }
+        };
+        ul.appendChild(li);
+      });
+      if (!passkeys.length && on) { local.set("pkSet", false); renderSecurity(); }
+    } catch {}
+  }
+  async function offerPasskey() {
+    renderSecurity();
+    if (local.get("pkSet", false) || local.get("pkAsked", false) || !(await platformAvailable())) return;
+    local.set("pkAsked", true);
+    const t = $("#toast"); t.innerHTML = "";
+    t.append("Unlock faster next time with Face ID or fingerprint.");
+    const yes = document.createElement("button"); yes.className = "act"; yes.type = "button"; yes.textContent = "Set up";
+    const no = document.createElement("button"); no.className = "act"; no.type = "button"; no.textContent = "Not now";
+    yes.onclick = () => { t.hidden = true; setupPasskey(); }; no.onclick = () => (t.hidden = true);
+    t.append(yes, no); t.hidden = false; clearTimeout(toast.timer);
+  }
+
   /* ---------------- sync ---------------- */
-  async function sync(first) {
+  async function sync(first, bg) {
     let st;
-    try { st = await api("/state"); } catch (err) { setStatus("off", "OFFLINE"); return; }
+    try { st = await api("/state", { bg }); } catch (err) { if (!err.locked) setStatus("off", "OFFLINE"); return; }
     showApp();
     S.threads = st.threads; S.todos = st.todos; S.budget = st.budget; S.lastSync = Date.now();
     if (!S.notesDirty && document.activeElement !== $("#notes")) $("#notes").value = st.notes;
@@ -91,9 +206,9 @@
     }
     if (!S.busy) setStatus("", "IDLE");
   }
-  document.addEventListener("visibilitychange", () => { if (!document.hidden && Date.now() - S.lastSync > 5000) sync(); });
-  window.addEventListener("focus", () => { if (Date.now() - S.lastSync > 5000) sync(); });
-  setInterval(() => { if (!document.hidden && !$("#app").hidden) sync(); }, 45000);
+  document.addEventListener("visibilitychange", () => { if (!document.hidden && Date.now() - S.lastSync > 5000) sync(false, true); });
+  window.addEventListener("focus", () => { if (Date.now() - S.lastSync > 5000) sync(false, true); });
+  setInterval(() => { if (!document.hidden && !$("#app").hidden) sync(false, true); }, 45000);
 
   function setStatus(kind, word) {
     const el = $("#statusLine");
@@ -395,6 +510,7 @@
       if (S.currentId !== res.threadId) { S.currentId = res.threadId; local.set("thread", res.threadId); }
       S.messages.push(res.user, ...res.replies);
       pending.replaceWith(turnEl(res.user, res.replies));
+      afterAnswer(res.replies);
       sync();
     } catch (err) {
       pending.querySelector(".answers").innerHTML = "";
@@ -682,6 +798,111 @@
     if (p.has("google")) { const msg = p.get("google"); history.replaceState(null, "", "/"); setTimeout(() => toast(msg, 7000), 600); }
   })();
 
+  /* ---------------- voice (works through Bluetooth glasses) ---------------- */
+  const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+  const voice = { active: false, rec: null, turn: false, audio: null };
+  $("#micBtn").hidden = !SR;
+  if (!SR) $("#voiceHint").textContent = "This browser can't listen. Chrome on your Galaxy or Razr works best; answers can still be read out loud.";
+  $("#speakToggle").checked = local.get("speak", false);
+  $("#speakToggle").onchange = (e) => local.set("speak", e.target.checked);
+
+  function voiceBar(text, show = true) { $("#voiceText").textContent = text; $("#voiceBar").hidden = !show; }
+  function stopVoice() {
+    try { voice.rec && voice.rec.abort(); } catch {}
+    try { window.speechSynthesis && speechSynthesis.cancel(); } catch {}
+    voice.active = false; voice.rec = null; $("#micBtn").classList.remove("on"); voiceBar("", false);
+  }
+  $("#voiceStop").onclick = () => { voice.turn = false; stopVoice(); };
+
+  function startListening() {
+    if (!SR || $("#app").hidden) return;
+    if (voice.active) { stopVoice(); return; }
+    try { window.speechSynthesis && speechSynthesis.cancel(); } catch {}
+    setView("ask"); markActive();
+    const rec = new SR();
+    rec.lang = navigator.language || "en-US"; rec.interimResults = true; rec.continuous = false; rec.maxAlternatives = 1;
+    let finalText = "";
+    voice.rec = rec; voice.active = true; $("#micBtn").classList.add("on"); voiceBar("Listening…");
+    rec.onresult = (e) => {
+      let interim = ""; finalText = "";
+      for (const r of e.results) (r.isFinal ? (finalText += r[0].transcript) : (interim += r[0].transcript));
+      q.value = (finalText + interim).trim(); grow(); markActive();
+    };
+    rec.onerror = (e) => {
+      const msg = { "not-allowed": "Sobriazar needs microphone access. Allow it in your browser's site settings.", "no-speech": "Didn't hear anything. Tap to try again.", "audio-capture": "No microphone found. Check that your glasses are connected." }[e.error];
+      if (msg) toast(msg);
+    };
+    rec.onend = () => {
+      voice.active = false; voice.rec = null; $("#micBtn").classList.remove("on"); voiceBar("", false);
+      const text = q.value.trim();
+      if (text) { voice.turn = true; send(); }
+    };
+    try { rec.start(); } catch { stopVoice(); }
+  }
+  $("#micBtn").onclick = startListening;
+
+  function speakable(md) {
+    return plain(md).split("\n").filter((l) => !/^\s*\|/.test(l)).join("\n")
+      .replace(/https?:\/\/\S+/g, "link").replace(/[•*#_`>]/g, " ").replace(/\s+\n/g, "\n").trim();
+  }
+  function pickVoice() {
+    const vs = (window.speechSynthesis && speechSynthesis.getVoices()) || [];
+    const lang = (navigator.language || "en-US").slice(0, 2);
+    return vs.find((v) => /Google US English|Samantha|Ava|Natural/i.test(v.name) && v.lang.startsWith(lang)) || vs.find((v) => v.lang.startsWith(lang)) || null;
+  }
+  function speak(text) {
+    if (!window.speechSynthesis || !text) return;
+    let t = text; if (t.length > 1600) { const cut = t.lastIndexOf(".", 1600); t = t.slice(0, cut > 400 ? cut + 1 : 1600) + " The rest is on screen."; }
+    speechSynthesis.cancel();
+    const u = new SpeechSynthesisUtterance(t);
+    const v = pickVoice(); if (v) u.voice = v;
+    u.rate = 1.05;
+    u.onstart = () => voiceBar("Speaking…");
+    u.onend = u.onerror = () => voiceBar("", false);
+    speechSynthesis.speak(u);
+  }
+  function afterAnswer(replies) {
+    const wantSpeak = voice.turn || $("#speakToggle").checked || $("#glassesToggle").checked;
+    voice.turn = false;
+    if (!wantSpeak) return;
+    const order = ["best", "claude", "gemini", "muse"];
+    const r = replies.filter((x) => x.role === "assistant").sort((a, b) => order.indexOf(a.engine) - order.indexOf(b.engine))[0];
+    if (r) speak(speakable(r.content));
+    else if (replies[0]) speak(String(replies[0].content).replace(/^⚠\s*/, ""));
+  }
+
+  // Glasses mode: keep a silent media session so a tap on the glasses (play/pause) starts listening.
+  function silentWav() {
+    const rate = 8000, n = rate; const buf = new ArrayBuffer(44 + n); const v = new DataView(buf);
+    const w = (o, str) => [...str].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)));
+    w(0, "RIFF"); v.setUint32(4, 36 + n, true); w(8, "WAVE"); w(12, "fmt "); v.setUint32(16, 16, true); v.setUint16(20, 1, true); v.setUint16(22, 1, true);
+    v.setUint32(24, rate, true); v.setUint32(28, rate, true); v.setUint16(32, 1, true); v.setUint16(34, 8, true); w(36, "data"); v.setUint32(40, n, true);
+    for (let i = 0; i < n; i++) v.setUint8(44 + i, 128);
+    return URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+  }
+  async function armGlasses() {
+    if (!voice.audio) { voice.audio = new Audio(silentWav()); voice.audio.loop = true; }
+    try { await voice.audio.play(); } catch { toast("Tap anywhere once to turn glasses mode back on."); return false; }
+    if ("mediaSession" in navigator) {
+      navigator.mediaSession.metadata = new MediaMetadata({ title: "Sobriazar", artist: "Tap your glasses to talk", artwork: [{ src: "/icons/icon-512.png", sizes: "512x512", type: "image/png" }] });
+      const go = () => { voice.audio.play().catch(() => {}); navigator.mediaSession.playbackState = "playing"; startListening(); };
+      ["play", "pause", "nexttrack", "previoustrack"].forEach((a) => { try { navigator.mediaSession.setActionHandler(a, go); } catch {} });
+      navigator.mediaSession.playbackState = "playing";
+    }
+    return true;
+  }
+  function disarmGlasses() {
+    if (voice.audio) voice.audio.pause();
+    if ("mediaSession" in navigator) ["play", "pause", "nexttrack", "previoustrack"].forEach((a) => { try { navigator.mediaSession.setActionHandler(a, null); } catch {} });
+  }
+  $("#glassesToggle").checked = local.get("glasses", false);
+  $("#glassesToggle").onchange = async (e) => {
+    local.set("glasses", e.target.checked);
+    if (e.target.checked) { if (await armGlasses()) toast("Glasses mode is on. Tap your glasses (or the mic) and speak."); }
+    else { disarmGlasses(); toast("Glasses mode is off."); }
+  };
+  if (local.get("glasses", false)) window.addEventListener("pointerdown", function rearm() { window.removeEventListener("pointerdown", rearm); if ($("#glassesToggle").checked) armGlasses(); });
+
   /* ---------------- views (phones / fold) ---------------- */
   function setView(v) {
     document.body.dataset.view = v;
@@ -790,5 +1011,5 @@
 
   /* ---------------- boot ---------------- */
   renderMode(); setView("ask"); grow();
-  sync(true).then(() => { if ($("#app").hidden && $("#login").hidden) showLogin(); });
+  sync(true).then(() => { if ($("#app").hidden && $("#login").hidden) showLogin(); else if (!$("#app").hidden) renderSecurity(); });
 })();
