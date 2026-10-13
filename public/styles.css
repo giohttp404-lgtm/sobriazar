@@ -13,6 +13,7 @@
   --g: #8db6ff;
   --c: #f2b07c;
   --best: #8fe3b4;
+  --m: #c4a8ff;
   --warn: #ff9b8f;
   --display: "Saira Condensed", "Arial Narrow", "Roboto Condensed", sans-serif;
   --sans: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
@@ -103,6 +104,7 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .budget-edit { display: grid; grid-template-columns: 1fr auto; gap: 6px; margin-top: 10px; }
 .budget-edit label { grid-column: 1 / -1; font: 11px var(--mono); color: var(--dim); }
 .budget-edit input { background: var(--void); border: 1px solid var(--line-hi); border-radius: 6px; padding: 6px 8px; min-width: 0; }
+.stat-row + .stat-row { margin-top: 6px; }
 .stat-row { display: flex; gap: 8px; align-items: center; font: 12px var(--mono); color: var(--dim); margin-top: 12px; flex-wrap: wrap; }
 .stat-row b { color: var(--fg); font-weight: 500; }
 .stat-row .muted { margin-left: auto; }
@@ -110,7 +112,7 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
   width: 22px; height: 22px; border-radius: 50%; display: inline-grid; place-items: center; flex: none;
   font: 600 10.5px var(--mono); color: var(--void); background: var(--dim);
 }
-.dot.g { background: var(--g); } .dot.c { background: var(--c); } .dot.best { background: var(--best); }
+.dot.g { background: var(--g); } .dot.c { background: var(--c); } .dot.m { background: var(--m); } .dot.best { background: var(--best); }
 
 /* ---------- tasks & notes ---------- */
 .todo-add { display: flex; gap: 6px; margin-bottom: 8px; }
@@ -194,7 +196,7 @@ body.chatting .convo { display: block; flex: 1 1 auto; }
 }
 .ask .att { display: flex; gap: 6px; flex-wrap: wrap; margin-top: 6px; }
 .answers { display: grid; gap: 16px; }
-.answers.two { grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); }
+.answers.two { grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); }
 .answer { min-width: 0; display: grid; gap: 8px; align-content: start; }
 .answer .src { display: flex; align-items: center; gap: 8px; font: 10.5px var(--mono); letter-spacing: .14em; text-transform: uppercase; color: var(--dim); }
 .answer.err .body { color: var(--warn); }
@@ -252,6 +254,8 @@ body.chatting .convo { display: block; flex: 1 1 auto; }
 .seg button[data-mode="gemini"][aria-pressed="true"] { color: var(--g); }
 .seg button[data-mode="claude"][aria-pressed="true"] { color: var(--c); }
 .seg button[data-mode="best"][aria-pressed="true"] { color: var(--best); }
+.seg button[data-mode="muse"][aria-pressed="true"] { color: var(--m); }
+.seg button { padding: 6px 11px; }
 .seg button:disabled { opacity: .3; cursor: not-allowed; }
 .lock { display: inline-flex; align-items: center; gap: 6px; background: transparent; border: 1px solid var(--line); border-radius: 8px; padding: 5px 10px; color: var(--dim); font: 11.5px var(--mono); cursor: pointer; }
 .lock svg { width: 14px; height: 14px; }

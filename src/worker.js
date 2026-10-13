@@ -182,6 +182,7 @@ async function state(env) {
   const s = Object.fromEntries(settings.results.map((r) => [r.key, r.value]));
   const claude = usage.results.find((r) => r.engine === "claude") || { requests: 0, cost: 0 };
   const gemini = usage.results.find((r) => r.engine === "gemini") || { requests: 0, cost: 0 };
+  const muse = usage.results.find((r) => r.engine === "muse") || { requests: 0, cost: 0 };
   return json({
     threads: threads.results,
     todos: todos.results,
@@ -196,8 +197,9 @@ async function state(env) {
       claudeRequests: claude.requests,
       geminiMonth: gemini.requests,
       geminiToday: gday.results[0]?.requests || 0,
+      museMonth: muse.requests,
     },
-    keys: { gemini: Boolean(env.GEMINI_API_KEY), claude: Boolean(env.ANTHROPIC_API_KEY) },
+    keys: { gemini: Boolean(env.GEMINI_API_KEY), claude: Boolean(env.ANTHROPIC_API_KEY), muse: Boolean(env.META_API_KEY) },
   });
 }
 
@@ -258,8 +260,9 @@ async function ask(request, env) {
   const text = String(body.text || "").trim();
   const files = Array.isArray(body.files) ? body.files.slice(0, 10) : [];
   const priv = Boolean(body.private);
-  let mode = ["gemini", "claude", "best", "both"].includes(body.mode) ? body.mode : "gemini";
-  if (priv && (mode === "gemini" || mode === "both")) mode = "claude";
+  let mode = body.mode === "both" ? "all" : body.mode;
+  if (!["gemini", "claude", "muse", "best", "all"].includes(mode)) mode = "gemini";
+  if (priv && mode !== "claude" && mode !== "best") mode = "claude";
   if (!text && !files.length) throw httpError(400, "Type something or attach a file.");
 
   const now = Date.now();
@@ -286,8 +289,9 @@ async function ask(request, env) {
 
   const turn = { text, files };
   const jobs = [];
-  if (mode === "gemini" || mode === "both") jobs.push(["gemini", () => callGemini(env, history, turn, "gemini")]);
-  if (mode === "claude" || mode === "both") jobs.push(["claude", () => callClaude(env, history, turn, env.CLAUDE_FAST_MODEL || "claude-haiku-5-5", "claude")]);
+  if (mode === "gemini" || mode === "all") jobs.push(["gemini", () => callGemini(env, history, turn, "gemini")]);
+  if (mode === "claude" || mode === "all") jobs.push(["claude", () => callClaude(env, history, turn, env.CLAUDE_FAST_MODEL || "claude-haiku-5-5", "claude")]);
+  if (mode === "muse" || (mode === "all" && env.META_API_KEY)) jobs.push(["muse", () => callMuse(env, history, turn)]);
   if (mode === "best") jobs.push(["best", () => bestAnswer(env, history, turn, priv)]);
 
   const settled = await Promise.allSettled(jobs.map(([, fn]) => fn()));
@@ -404,6 +408,43 @@ async function callClaude(env, history, turn, model, label) {
   const text = (j.content || []).filter((b) => b.type === "text").map((b) => b.text).join("").trim();
   if (!text) throw new Error("C didn't return an answer. Try rewording it.");
   return text;
+}
+
+async function callMuse(env, history, turn) {
+  if (!env.META_API_KEY) throw httpError(400, "The M key isn't set up yet. Add META_API_KEY in Cloudflare.");
+  const model = env.MUSE_MODEL || "muse-spark-1.3";
+  const messages = [{ role: "system", content: STYLE }, ...historyFor(history, "muse").map((m) => ({ role: m.role, content: m.text }))];
+  const content = [];
+  for (const f of turn.files) {
+    if (f.kind === "text") content.push({ type: "text", text: `File "${f.name}":\n${f.text}` });
+    else if (f.type === "application/pdf") throw new Error("M can't read PDFs here yet. Use G, C, or Best for PDFs.");
+    else if (/^image\//.test(f.type)) content.push({ type: "image_url", image_url: { url: `data:${f.type};base64,${f.data}` } });
+  }
+  content.push({ type: "text", text: turn.text || "Please look at the attached file." });
+  messages.push({ role: "user", content: content.length === 1 ? content[0].text : content });
+
+  const r = await fetch("https://api.meta.ai/v1/chat/completions", {
+    method: "POST",
+    headers: { "content-type": "application/json", authorization: `Bearer ${env.META_API_KEY}` },
+    body: JSON.stringify({ model, messages }),
+  });
+  const j = await r.json().catch(() => ({}));
+  await recordMuse(env);
+  if (!r.ok) {
+    const msg = (typeof j.error === "string" ? j.error : j.error?.message) || j.message || `M request failed (${r.status}).`;
+    if (r.status === 402 || /credit|billing|payment|balance/i.test(msg)) throw new Error("M is out of credit or needs billing. Check Billing on dev.meta.ai.");
+    if (r.status === 429) throw new Error("M is busy or rate-limited right now. Try again in a minute, or use G or C.");
+    throw new Error(msg);
+  }
+  const c = j.choices?.[0]?.message?.content;
+  const text = (Array.isArray(c) ? c.map((p) => p.text || "").join("") : c || "").trim();
+  if (!text) throw new Error("M didn't return an answer. Try rewording it.");
+  return text;
+}
+
+async function recordMuse(env) {
+  const month = new Date().toISOString().slice(0, 7);
+  await env.DB.prepare("INSERT INTO usage (month, engine, requests, cost) VALUES (?, 'muse', 1, 0) ON CONFLICT(month, engine) DO UPDATE SET requests = requests + 1").bind(month).run();
 }
 
 async function recordClaude(env, cost) {

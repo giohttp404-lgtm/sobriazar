@@ -18,11 +18,12 @@
     { id: "email", name: "Email", prompt: "Write a short, friendly, professional email about this:" },
     { id: "spanish", name: "Spanish", prompt: "Translate this into clear, natural Spanish:" },
   ];
-  const LABELS = { gemini: ["G", "g", "Result · G"], claude: ["C", "c", "Result · C"], best: ["★", "best", "Best result"] };
+  const LABELS = { gemini: ["G", "g", "Result · G"], claude: ["C", "c", "Result · C"], muse: ["M", "m", "Result · M"], best: ["★", "best", "Best result"] };
+  const OFF_PRIVATE = ["gemini", "muse", "all"];
   const MAX_BYTES = 18 * 1024 * 1024;
 
   const S = {
-    threads: [], todos: [], currentId: null, messages: [], mode: local.get("mode", "gemini"),
+    threads: [], todos: [], currentId: null, messages: [], mode: ((m) => (m === "both" ? "all" : m))(local.get("mode", "gemini")), keys: { gemini: true, claude: true, muse: false },
     priv: local.get("priv", false), files: [],
     skills: local.get("skills", null) || DEFAULT_SKILLS, skillUses: local.get("skillUses", {}), skillSort: local.get("skillSort", "used"), busy: false, notesDirty: false, budget: 5, lastSync: 0,
   };
@@ -73,6 +74,9 @@
       local.set("skills", S.skills); local.set("skillUses", S.skillUses); local.set("skillSort", S.skillSort);
       renderSkills();
     }
+    S.keys = st.keys || S.keys;
+    if (S.mode === "muse" && !S.keys.muse) { S.mode = "gemini"; local.set("mode", S.mode); }
+    renderMode();
     renderUsage(st.usage); renderHistory(); renderTodos();
     if (first) {
       const last = local.get("thread", null);
@@ -103,6 +107,8 @@
     $("#cBar").style.width = pct + "%";
     $("#gToday").textContent = u.geminiToday || 0;
     $("#cReq").textContent = `${u.claudeRequests || 0} C requests`;
+    $("#mRow").hidden = !S.keys.muse;
+    $("#mMonth").textContent = u.museMonth || 0;
   }
   $("#budgetBtn").onclick = () => { const f = $("#budgetForm"); f.hidden = !f.hidden; $("#budgetIn").value = S.budget; if (!f.hidden) $("#budgetIn").focus(); };
   $("#budgetForm").addEventListener("submit", async (e) => {
@@ -351,12 +357,13 @@
   });
   $("#composer").addEventListener("submit", (e) => { e.preventDefault(); send(); });
 
-  function enginesFor(mode) { return mode === "both" ? ["gemini", "claude"] : [mode]; }
+  function enginesFor(mode) { return mode === "all" ? ["gemini", "claude", ...(S.keys.muse ? ["muse"] : [])] : [mode]; }
+  function effectiveMode() { return S.priv && OFF_PRIVATE.includes(S.mode) ? "claude" : S.mode; }
 
   async function send() {
     const text = q.value.trim();
     if (S.busy || (!text && !S.files.length)) return;
-    const mode = S.priv && (S.mode === "gemini" || S.mode === "both") ? "claude" : S.mode;
+    const mode = effectiveMode();
     const files = S.files.map((f) => f.payload);
     const user = { role: "user", content: text, files: S.files.map((f) => ({ name: f.name })) };
 
@@ -376,7 +383,7 @@
       sync();
     } catch (err) {
       pending.querySelector(".answers").innerHTML = "";
-      pending.querySelector(".answers").appendChild(answerEl({ role: "error", engine: mode === "both" ? "gemini" : mode, content: err.message }));
+      pending.querySelector(".answers").appendChild(answerEl({ role: "error", engine: mode === "all" ? "gemini" : mode, content: err.message }));
       if (!text) {} else if (!q.value) { q.value = text; grow(); }
     } finally {
       S.busy = false; $("#send").disabled = false; setStatus("", "IDLE"); galaxyMain.setBusy(false);
@@ -385,17 +392,18 @@
 
   /* ---------------- modes ---------------- */
   function renderMode() {
-    $$(".seg button").forEach((b) => {
+    $$(".compose-opts .seg button").forEach((b) => {
       b.setAttribute("aria-pressed", String(b.dataset.mode === S.mode));
-      b.disabled = S.priv && (b.dataset.mode === "gemini" || b.dataset.mode === "both");
+      b.disabled = S.priv && OFF_PRIVATE.includes(b.dataset.mode);
+      if (b.dataset.mode === "muse") b.hidden = !S.keys.muse;
     });
     $("#privBtn").setAttribute("aria-pressed", String(S.priv));
-    galaxyMain.setTint(S.priv && (S.mode === "gemini" || S.mode === "both") ? "claude" : S.mode);
+    galaxyMain.setTint(effectiveMode());
   }
-  $$(".seg button").forEach((b) => (b.onclick = () => { S.mode = b.dataset.mode; local.set("mode", S.mode); renderMode(); }));
+  $$(".compose-opts .seg button").forEach((b) => (b.onclick = () => { S.mode = b.dataset.mode; local.set("mode", S.mode); renderMode(); }));
   $("#privBtn").onclick = () => {
     S.priv = !S.priv; local.set("priv", S.priv);
-    if (S.priv && (S.mode === "gemini" || S.mode === "both")) { S.mode = "claude"; local.set("mode", S.mode); }
+    if (S.priv && OFF_PRIVATE.includes(S.mode)) { S.mode = "claude"; local.set("mode", S.mode); }
     renderMode();
   };
 
@@ -574,7 +582,7 @@
   function Galaxy(canvas) {
     const ctx = canvas.getContext("2d");
     const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const TINTS = { gemini: [141, 182, 255], claude: [242, 176, 124], best: [143, 227, 180], both: [223, 230, 255] };
+    const TINTS = { gemini: [141, 182, 255], claude: [242, 176, 124], best: [143, 227, 180], muse: [196, 168, 255], all: [223, 230, 255] };
     let stars = [], w = 0, h = 0, dpr = 1, raf = 0, running = false, t = 0;
     let speed = 1, targetSpeed = 1, glow = 0, targetGlow = 0, tint = TINTS.gemini, tintNow = [...TINTS.gemini];
 

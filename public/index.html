@@ -62,6 +62,10 @@
         <span><b id="gToday">0</b> today · free</span>
         <span class="muted" id="cReq">0 C requests</span>
       </div>
+      <div class="stat-row" id="mRow" hidden>
+        <span class="dot m">M</span>
+        <span><b id="mMonth">0</b> this month</span>
+      </div>
     </section>
 
     <section class="panel">
@@ -123,8 +127,9 @@
         <div class="seg" role="group" aria-label="Source">
           <button type="button" data-mode="gemini" title="G only (free)">G</button>
           <button type="button" data-mode="claude" title="C only">C</button>
+          <button type="button" data-mode="muse" title="M only">M</button>
           <button type="button" data-mode="best" title="G drafts, C polishes">Best</button>
-          <button type="button" data-mode="both" title="Both side by side">Both</button>
+          <button type="button" data-mode="all" title="All side by side">All</button>
         </div>
         <button type="button" class="lock" id="privBtn" aria-pressed="false" title="Student info: keep it off G">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>

@@ -19,7 +19,8 @@
   "vars": {
     "GEMINI_MODEL": "gemini-3.8-flash",
     "CLAUDE_FAST_MODEL": "claude-haiku-5-5",
-    "CLAUDE_BEST_MODEL": "claude-sonnet-5-5"
+    "CLAUDE_BEST_MODEL": "claude-sonnet-5-5",
+    "MUSE_MODEL": "muse-spark-1.3"
   },
   "observability": { "enabled": true },
   "keep_vars": true

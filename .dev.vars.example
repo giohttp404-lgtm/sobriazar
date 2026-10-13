@@ -4,3 +4,5 @@ APP_PASSWORD=
 GEMINI_API_KEY=
 # Your Claude key from the Claude Console (API Keys page)
 ANTHROPIC_API_KEY=
+# Optional: your Meta Model API key from dev.meta.ai (adds the M source)
+META_API_KEY=
