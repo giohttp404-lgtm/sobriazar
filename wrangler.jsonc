@@ -12,7 +12,8 @@
   "d1_databases": [
     {
       "binding": "DB",
-      "database_name": "sobriazar-db"
+      "database_name": "sobriazar-db",
+      "database_id": "96a8118d-2c54-44bc-882b-cb0632ec81b5"
     }
   ],
   "vars": {
@@ -20,5 +21,6 @@
     "CLAUDE_FAST_MODEL": "claude-haiku-5-5",
     "CLAUDE_BEST_MODEL": "claude-sonnet-5-5"
   },
-  "observability": { "enabled": true }
+  "observability": { "enabled": true },
+  "keep_vars": true
 }

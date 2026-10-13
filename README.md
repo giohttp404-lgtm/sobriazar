@@ -4,6 +4,8 @@ Personal search and command center. Answers come from two sources (G and C) thro
 
 [![Deploy to Cloudflare](https://deploy.workers.cloudflare.com/button)](https://deploy.workers.cloudflare.com/?url=https://github.com/giohttp404-lgtm/sobriazar)
 
+Live at https://sobriazar.giohttp404.workers.dev
+
 ## Secrets (set in Cloudflare, never in this repo)
 
 - `APP_PASSWORD` – the password used to sign in
