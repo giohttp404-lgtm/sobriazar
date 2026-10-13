@@ -129,6 +129,9 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
   width: 22px; height: 22px; border-radius: 50%; display: inline-grid; place-items: center; flex: none;
   font: 600 10.5px var(--mono); color: var(--void); background: var(--dim);
 }
+.dot.auto { background: linear-gradient(135deg, var(--ember), var(--ice)); }
+.seg button[data-mode="auto"][aria-pressed="true"] { color: var(--ice); }
+.used span.route { border-style: solid; color: var(--ice); border-color: rgba(111, 220, 255, .35); }
 .dot.g { background: var(--g); } .dot.c { background: var(--c); } .dot.m { background: var(--m); } .dot.best { background: var(--best); }
 
 /* ---------- tasks & notes ---------- */

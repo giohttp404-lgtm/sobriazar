@@ -321,10 +321,10 @@ async function ask(request, env) {
   const body = await request.json();
   const text = String(body.text || "").trim();
   const files = Array.isArray(body.files) ? body.files.slice(0, 10) : [];
-  const priv = Boolean(body.private);
+  let priv = Boolean(body.private);
   let mode = body.mode === "both" ? "all" : body.mode;
-  if (!["gemini", "claude", "muse", "best", "all"].includes(mode)) mode = "gemini";
-  if (priv && mode !== "claude" && mode !== "best") mode = "claude";
+  if (!["auto", "gemini", "claude", "muse", "best", "all"].includes(mode)) mode = "auto";
+  if (priv && mode !== "claude" && mode !== "best" && mode !== "auto") mode = "claude";
   if (!text && !files.length) throw httpError(400, "Type something or attach a file.");
 
   const now = Date.now();
@@ -353,14 +353,20 @@ async function ask(request, env) {
   const jobs = [];
   const accounts = googleReady(env) ? await listAccounts(env) : [];
   const tz = validTz(body.tz);
-  const useAccounts = accounts.length > 0 && body.useAccounts !== false && (body.useAccounts === true || wantsAccounts(text));
+  let route = null, search = false;
+  let useAccounts = accounts.length > 0 && body.useAccounts !== false && (body.useAccounts === true || wantsAccounts(text));
+  if (mode === "auto") {
+    route = await autoRoute(env, { text, files, history, priv, hasAccounts: accounts.length > 0, forceAccounts: body.useAccounts === true });
+    mode = route.mode; useAccounts = route.accounts; search = route.search;
+    if (route.private) priv = true;
+  }
   if (useAccounts) {
     // Personal data (calendar, email, Drive) only goes to C, never to G or M.
     const engine = mode === "best" ? "best" : "claude";
     const model = mode === "best" ? env.CLAUDE_BEST_MODEL || "claude-sonnet-5-5" : env.CLAUDE_FAST_MODEL || "claude-haiku-5-5";
     jobs.push([engine, () => accountAgent(env, history, turn, model, { accounts, tz })]);
   }
-  else if (mode === "gemini" || mode === "all") jobs.push(["gemini", () => callGemini(env, history, turn, "gemini")]);
+  else if (mode === "gemini" || mode === "all") jobs.push(["gemini", () => callGemini(env, history, turn, "gemini", { search })]);
   if (!useAccounts) {
     if (mode === "claude" || mode === "all") jobs.push(["claude", () => callClaude(env, history, turn, env.CLAUDE_FAST_MODEL || "claude-haiku-5-5", "claude")]);
     if (mode === "muse" || (mode === "all" && env.META_API_KEY)) jobs.push(["muse", () => callMuse(env, history, turn)]);
@@ -376,6 +382,7 @@ async function ask(request, env) {
     const val = ok ? r.value : null;
     const content = ok ? (typeof val === "string" ? val : val.text) : `⚠ ${r.reason?.message || "No answer came back."}`;
     const used = ok && typeof val === "object" && val.used?.length ? val.used.map((n) => ({ name: n, used: true })) : [];
+    if (route) used.unshift({ route: route.accounts && !used.length ? route.label.replace("Your accounts", "Answer") : route.label });
     const msg = { id: uid(), role: ok ? "assistant" : "error", engine, content, files: used, created: Date.now() + i };
     replies.push(msg);
     stmts.push(env.DB.prepare("INSERT INTO messages (id, thread_id, role, engine, content, files, created) VALUES (?, ?, ?, ?, ?, ?, ?)")
@@ -384,7 +391,72 @@ async function ask(request, env) {
   stmts.push(env.DB.prepare("UPDATE threads SET updated = ? WHERE id = ?").bind(Date.now(), threadId));
   await env.DB.batch(stmts);
 
-  return json({ threadId, user: userMsg, replies, mode });
+  return json({ threadId, user: userMsg, replies, mode, route: route?.label || null });
+}
+
+/* ---------------- Auto: choose the source and where to look ---------------- */
+
+const STUDENT_WORDS = /\b(iep|504|my students?|this student|student'?s|(his|her|their) (grades?|behavior|scores?|accommodations?|parents?)|roster|behavior (note|report|log)s?|kickboard|parent (email|meeting|conference)|special ed|sped|diagnos)/i;
+const CURRENT_WORDS = /\b(news|latest|current(ly)?|right now|today'?s|this morning|tonight'?s|score|scores|who won|weather|forecast|price|prices|stock|stocks|exchange rate|election|released?|announced?|trending|happening|open now|hours|near me|2026|2027)\b/i;
+const WRITING_WORDS = /\b(write|rewrite|draft|email|letter|message|text to|reply|simplify|summari[sz]e|translate|spanish|exit ticket|r\.?a\.?c\.?e|bpq|quiz|questions|packet|worksheet|lesson|slides?|outline|essay|paragraph|tiered|scaffold|rubric|feedback|proofread|edit this|make (it|this|that))\b/i;
+const BIG_WORDS = /\b(plan (a|my|the) (unit|week|semester|year|trip|budget)|compare|pros and cons|strategy|step[- ]by[- ]step|in detail|detailed|analy[sz]e|deep dive|research|thorough|full plan|business plan)\b/i;
+const FOLLOW_UP = /^(and|also|now|then|ok(ay)?|what about|move|add|change|make|send|save|put|do the same|same for|that|it|this|those)\b/i;
+const LABEL = { gemini: "G", claude: "C", best: "Best", muse: "M" };
+
+async function autoRoute(env, { text, files, history, priv, hasAccounts, forceAccounts }) {
+  const pick = (mode, why, extra = {}) => ({ mode, accounts: false, search: false, private: false, ...extra, label: `Auto → ${LABEL[mode]} · ${why}` });
+  const t = text || "";
+  const lastAnswer = [...history].reverse().find((m) => m.role === "assistant");
+  const lastUsedAccounts = Boolean(lastAnswer?.files?.some?.((f) => f.used));
+  const student = priv || STUDENT_WORDS.test(t);
+
+  // 1. Personal accounts (calendar, email, Drive, tasks) always go to C.
+  const strongAccount = /\b(calendar|schedule|agenda|meeting|appointment|my day|my week|brief|email|emails|inbox|gmail|unread|draft|drive|doc|docs|file|files|folder|library|my tasks|to-?dos?|free time|available)\b/i.test(t);
+  const accountish = forceAccounts || (wantsAccounts(t) && (strongAccount || !CURRENT_WORDS.test(t)));
+  if (hasAccounts && (accountish || (lastUsedAccounts && FOLLOW_UP.test(t) && t.length < 200))) {
+    const big = BIG_WORDS.test(t);
+    return pick(big ? "best" : "claude", "Your accounts", { accounts: true, private: student });
+  }
+  // 2. Student information never leaves C.
+  if (student) return pick(BIG_WORDS.test(t) || t.length > 1500 ? "best" : "claude", "Private", { private: true });
+  // 3. Files: C reads PDFs and photos well and cheaply.
+  if (files.length) return pick(BIG_WORDS.test(t) ? "best" : "claude", "Files");
+  // 4. Follow-ups stay with whoever answered last.
+  if (lastAnswer && FOLLOW_UP.test(t) && t.length < 200 && !WRITING_WORDS.test(t) && !BIG_WORDS.test(t)) {
+    const prev = lastAnswer.engine === "muse" ? "gemini" : lastAnswer.engine;
+    if (["gemini", "claude", "best"].includes(prev)) return pick(prev, "Follow-up", { search: prev === "gemini" && CURRENT_WORDS.test(t) });
+  }
+  // 5. Clear signals.
+  if (BIG_WORDS.test(t) || t.length > 1500) return pick("best", "Big task");
+  if (WRITING_WORDS.test(t)) return pick("claude", "Writing");
+  if (CURRENT_WORDS.test(t)) return pick("gemini", "Web search", { search: true });
+  if (t.length <= 140) return pick("gemini", "Quick answer", { search: /\?$/.test(t) && /\b(who|when|where|what|how much|how many|is|are|does|did)\b/i.test(t) });
+
+  // 6. Unclear: ask G (free) to sort it, quickly.
+  const kind = await classify(env, t);
+  if (kind === "current") return pick("gemini", "Web search", { search: true });
+  if (kind === "writing") return pick("claude", "Writing");
+  if (kind === "big") return pick("best", "Big task");
+  return pick("gemini", "Quick answer");
+}
+
+async function classify(env, text) {
+  if (!env.GEMINI_API_KEY) return "quick";
+  try {
+    const ctrl = new AbortController(); const timer = setTimeout(() => ctrl.abort(), 4000);
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(env.GEMINI_MODEL || "gemini-3.8-flash")}:generateContent`, {
+      method: "POST", signal: ctrl.signal,
+      headers: { "content-type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY },
+      body: JSON.stringify({
+        contents: [{ role: "user", parts: [{ text: `Classify this request with one word: "quick" (short factual or casual answer), "current" (needs up-to-date info from the web), "writing" (produce or rewrite text, emails, school materials), or "big" (long, multi-part planning or analysis). Request:\n${text.slice(0, 3000)}` }] }],
+        generationConfig: { responseMimeType: "application/json", responseSchema: { type: "STRING", enum: ["quick", "current", "writing", "big"] }, maxOutputTokens: 10 },
+      }),
+    });
+    clearTimeout(timer);
+    const j = await r.json();
+    const out = (j.candidates?.[0]?.content?.parts?.[0]?.text || "").replace(/"/g, "").trim();
+    return ["quick", "current", "writing", "big"].includes(out) ? out : "quick";
+  } catch { return "quick"; }
 }
 
 function validTz(tz) {
@@ -494,7 +566,7 @@ function historyFor(history, engine) {
   return clean;
 }
 
-async function callGemini(env, history, turn, label) {
+async function callGemini(env, history, turn, label, opts = {}) {
   if (!env.GEMINI_API_KEY) throw httpError(400, "The Gemini key isn't set up yet.");
   const model = env.GEMINI_MODEL || "gemini-3.8-flash";
   const contents = historyFor(history, "gemini").map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.text }] }));
@@ -509,7 +581,7 @@ async function callGemini(env, history, turn, label) {
   const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
     method: "POST",
     headers: { "content-type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY },
-    body: JSON.stringify({ systemInstruction: { parts: [{ text: STYLE }] }, contents }),
+    body: JSON.stringify({ systemInstruction: { parts: [{ text: STYLE }] }, contents, ...(opts.search ? { tools: [{ google_search: {} }] } : {}) }),
   });
   const j = await r.json().catch(() => ({}));
   await recordGemini(env);
@@ -517,9 +589,13 @@ async function callGemini(env, history, turn, label) {
     if (r.status === 429) throw new Error("G has hit today's free limit. It resets tomorrow — use C or Best for now.");
     throw new Error(j.error?.message || `G request failed (${r.status}).`);
   }
-  const text = (j.candidates?.[0]?.content?.parts || []).filter((p) => !p.thought).map((p) => p.text || "").join("").trim();
+  let text = (j.candidates?.[0]?.content?.parts || []).filter((p) => !p.thought).map((p) => p.text || "").join("").trim();
   if (!text) throw new Error("G didn't return an answer. Try rewording it.");
-  return text;
+  const chunks = j.candidates?.[0]?.groundingMetadata?.groundingChunks || [];
+  const seen = new Set();
+  const sources = chunks.map((c) => c.web).filter((w) => w?.uri && !seen.has(w.title || w.uri) && seen.add(w.title || w.uri)).slice(0, 5);
+  if (sources.length) text += "\n\n**Sources:** " + sources.map((w) => `[${(w.title || "source").replace(/[\[\]]/g, "")}](${w.uri})`).join(" · ");
+  return opts.search ? { text, used: ["Web search"] } : text;
 }
 
 async function callClaude(env, history, turn, model, label) {

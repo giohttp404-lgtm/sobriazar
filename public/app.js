@@ -19,12 +19,12 @@
     { id: "email", name: "Email", prompt: "Write a short, friendly, professional email about this:" },
     { id: "spanish", name: "Spanish", prompt: "Translate this into clear, natural Spanish:" },
   ];
-  const LABELS = { gemini: ["G", "g", "Result · G"], claude: ["C", "c", "Result · C"], muse: ["M", "m", "Result · M"], best: ["★", "best", "Best result"] };
+  const LABELS = { auto: ["A", "auto", "Auto"], gemini: ["G", "g", "Result · G"], claude: ["C", "c", "Result · C"], muse: ["M", "m", "Result · M"], best: ["★", "best", "Best result"] };
   const OFF_PRIVATE = ["gemini", "muse", "all"];
   const MAX_BYTES = 18 * 1024 * 1024;
 
   const S = {
-    threads: [], todos: [], currentId: null, messages: [], mode: ((m) => (m === "both" ? "all" : m))(local.get("mode", "gemini")), keys: { gemini: true, claude: true, muse: false },
+    threads: [], todos: [], currentId: null, messages: [], mode: ((m) => (m === "both" ? "all" : m))(local.get("autoIntro", false) ? local.get("mode", "auto") : (local.set("autoIntro", true), local.set("mode", "auto"), "auto")), keys: { gemini: true, claude: true, muse: false },
     google: { ready: false, picker: false, accounts: [], library: [] }, forceAccounts: false,
     priv: local.get("priv", false), files: [],
     skills: local.get("skills", null) || DEFAULT_SKILLS, skillUses: local.get("skillUses", {}), skillSort: local.get("skillSort", "used"), busy: false, notesDirty: false, budget: 5, lastSync: 0,
@@ -457,8 +457,10 @@
     if (m.role === "error") { body.textContent = m.content.replace(/^⚠\s*/, ""); return el; }
     body.innerHTML = md(m.content);
     const usedList = (m.files || []).filter((f) => f.used);
-    if (usedList.length) {
+    const routeNote = (m.files || []).find((f) => f.route);
+    if (usedList.length || routeNote) {
       const u = document.createElement("div"); u.className = "used";
+      if (routeNote) { const sp = document.createElement("span"); sp.className = "route"; sp.textContent = routeNote.route; u.appendChild(sp); }
       [...new Set(usedList.map((f) => f.name))].forEach((n) => { const sp = document.createElement("span"); sp.textContent = "Used " + n; u.appendChild(sp); });
       el.insertBefore(u, body);
     }
@@ -800,7 +802,8 @@
 
   /* ---------------- voice (works through Bluetooth glasses) ---------------- */
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
-  const voice = { active: false, rec: null, turn: false, audio: null };
+  const voice = { active: false, rec: null, turn: false, audio: null, convo: false };
+  const STOP_WORDS = /^(stop|stop listening|that'?s all|that is all|thanks|thank you|never ?mind|goodbye|bye|i'?m done|done)[.!]?$/i;
   $("#micBtn").hidden = !SR;
   if (!SR) $("#voiceHint").textContent = "This browser can't listen. Chrome on your Galaxy or Razr works best; answers can still be read out loud.";
   $("#speakToggle").checked = local.get("speak", false);
@@ -812,17 +815,18 @@
     try { window.speechSynthesis && speechSynthesis.cancel(); } catch {}
     voice.active = false; voice.rec = null; $("#micBtn").classList.remove("on"); voiceBar("", false);
   }
-  $("#voiceStop").onclick = () => { voice.turn = false; stopVoice(); };
+  $("#voiceStop").onclick = () => { voice.turn = false; voice.convo = false; stopVoice(); };
 
   function startListening() {
     if (!SR || $("#app").hidden) return;
-    if (voice.active) { stopVoice(); return; }
+    if (voice.active) { voice.convo = false; stopVoice(); return; }
+    voice.convo = true;
     try { window.speechSynthesis && speechSynthesis.cancel(); } catch {}
     setView("ask"); markActive();
     const rec = new SR();
     rec.lang = navigator.language || "en-US"; rec.interimResults = true; rec.continuous = false; rec.maxAlternatives = 1;
     let finalText = "";
-    voice.rec = rec; voice.active = true; $("#micBtn").classList.add("on"); voiceBar("Listening…");
+    voice.rec = rec; voice.active = true; $("#micBtn").classList.add("on"); voiceBar(voice.followUp ? "Listening for a follow-up… say \u201cstop\u201d to end" : "Listening…");
     rec.onresult = (e) => {
       let interim = ""; finalText = "";
       for (const r of e.results) (r.isFinal ? (finalText += r[0].transcript) : (interim += r[0].transcript));
@@ -830,12 +834,16 @@
     };
     rec.onerror = (e) => {
       const msg = { "not-allowed": "Sobriazar needs microphone access. Allow it in your browser's site settings.", "no-speech": "Didn't hear anything. Tap to try again.", "audio-capture": "No microphone found. Check that your glasses are connected." }[e.error];
+      if (e.error === "no-speech" && voice.followUp) return;
       if (msg) toast(msg);
     };
     rec.onend = () => {
       voice.active = false; voice.rec = null; $("#micBtn").classList.remove("on"); voiceBar("", false);
       const text = q.value.trim();
-      if (text) { voice.turn = true; send(); }
+      const wasFollow = voice.followUp; voice.followUp = false;
+      if (!text) { voice.convo = false; if (wasFollow) voiceBar("", false); return; }
+      if (STOP_WORDS.test(text)) { q.value = ""; grow(); voice.convo = false; return; }
+      voice.turn = true; send();
     };
     try { rec.start(); } catch { stopVoice(); }
   }
@@ -858,15 +866,23 @@
     const v = pickVoice(); if (v) u.voice = v;
     u.rate = 1.05;
     u.onstart = () => voiceBar("Speaking…");
-    u.onend = u.onerror = () => voiceBar("", false);
+    u.onend = () => { voiceBar("", false); listenAgain(); };
+    u.onerror = () => voiceBar("", false);
     speechSynthesis.speak(u);
   }
+  function listenAgain() {
+    if (!voice.convo || voice.active || $("#app").hidden) return;
+    voice.followUp = true;
+    setTimeout(() => { if (voice.convo && !voice.active) { voice.convo = false; startListeningFollow(); } }, 350);
+  }
+  function startListeningFollow() { startListening(); voice.followUp = true; voiceBar("Listening for a follow-up… say \u201cstop\u201d to end"); }
   function afterAnswer(replies) {
     const wantSpeak = voice.turn || $("#speakToggle").checked || $("#glassesToggle").checked;
     voice.turn = false;
     if (!wantSpeak) return;
     const order = ["best", "claude", "gemini", "muse"];
     const r = replies.filter((x) => x.role === "assistant").sort((a, b) => order.indexOf(a.engine) - order.indexOf(b.engine))[0];
+    if (!window.speechSynthesis) { listenAgain(); return; }
     if (r) speak(speakable(r.content));
     else if (replies[0]) speak(String(replies[0].content).replace(/^⚠\s*/, ""));
   }
@@ -928,7 +944,7 @@
   function Galaxy(canvas) {
     const ctx = canvas.getContext("2d");
     const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const TINTS = { gemini: [111, 190, 255], claude: [255, 140, 90], muse: [190, 150, 255], best: [120, 230, 180], all: [200, 220, 255] };
+    const TINTS = { gemini: [111, 190, 255], claude: [255, 140, 90], muse: [190, 150, 255], best: [120, 230, 180], all: [200, 220, 255], auto: [230, 120, 160] };
     const RED = [255, 74, 60], BLUE = [90, 210, 255];
     let w = 0, h = 0, dpr = 1, raf = 0, running = false, last = 0;
     let parts = [], busy = false, energy = 0, tint = TINTS.gemini, tintNow = [...TINTS.gemini];
