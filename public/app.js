@@ -9,6 +9,7 @@
   };
 
   const DEFAULT_SKILLS = [
+    { id: "brief", name: "Morning brief", prompt: "Give me my morning brief: today's schedule across all my calendars, anything important or unread in my email from the last day, and my open tasks. Keep it short and scannable." },
     { id: "plan", name: "Plan today", prompt: "Help me plan my day as a simple time-blocked list. Here's what I have going on:" },
     { id: "simplify", name: "Simplify", prompt: "Rewrite this so a 7th grader can understand it. Keep the key ideas and vocabulary:" },
     { id: "exit", name: "Exit ticket", prompt: "Write a short R.A.C.E. exit ticket (one question plus a model answer showing Restate, Answer, Cite, Explain) based on this:" },
@@ -24,6 +25,7 @@
 
   const S = {
     threads: [], todos: [], currentId: null, messages: [], mode: ((m) => (m === "both" ? "all" : m))(local.get("mode", "gemini")), keys: { gemini: true, claude: true, muse: false },
+    google: { ready: false, picker: false, accounts: [], library: [] }, forceAccounts: false,
     priv: local.get("priv", false), files: [],
     skills: local.get("skills", null) || DEFAULT_SKILLS, skillUses: local.get("skillUses", {}), skillSort: local.get("skillSort", "used"), busy: false, notesDirty: false, budget: 5, lastSync: 0,
   };
@@ -75,6 +77,7 @@
       renderSkills();
     }
     S.keys = st.keys || S.keys;
+    S.google = st.google || S.google; renderGoogle();
     if (S.mode === "muse" && !S.keys.muse) { S.mode = "gemini"; local.set("mode", S.mode); }
     renderMode();
     renderUsage(st.usage); renderHistory(); renderTodos();
@@ -338,11 +341,22 @@
     if (m.pending) { body.innerHTML = `<div class="skel"><i></i><i></i><i></i><i></i></div>`; return el; }
     if (m.role === "error") { body.textContent = m.content.replace(/^⚠\s*/, ""); return el; }
     body.innerHTML = md(m.content);
+    const usedList = (m.files || []).filter((f) => f.used);
+    if (usedList.length) {
+      const u = document.createElement("div"); u.className = "used";
+      [...new Set(usedList.map((f) => f.name))].forEach((n) => { const sp = document.createElement("span"); sp.textContent = "Used " + n; u.appendChild(sp); });
+      el.insertBefore(u, body);
+    }
     const a = document.createElement("div"); a.className = "actions";
     a.innerHTML = `<button class="act" type="button">Copy</button><button class="act" type="button">Copy plain text</button>`;
     const [rich, plainBtn] = a.children;
     rich.onclick = () => copy(rich, m.content, true);
     plainBtn.onclick = () => copy(plainBtn, m.content, false);
+    if (S.google.accounts.length) {
+      const save = document.createElement("button"); save.type = "button"; save.className = "act"; save.textContent = "Save to Drive";
+      save.onclick = () => saveToDrive(save, m.content);
+      a.appendChild(save);
+    }
     el.appendChild(a);
     return el;
   }
@@ -367,6 +381,7 @@
     const files = S.files.map((f) => f.payload);
     const user = { role: "user", content: text, files: S.files.map((f) => ({ name: f.name })) };
 
+    const force = S.forceAccounts;
     S.busy = true; $("#send").disabled = true; setStatus("busy", "WORKING"); galaxyMain.setBusy(true, mode);
     q.value = ""; grow(); S.files = []; renderChips();
     document.body.classList.add("chatting");
@@ -376,7 +391,7 @@
     galaxyMain.resize();
 
     try {
-      const res = await api("/ask", { method: "POST", body: { threadId: S.currentId, text, mode, files, private: S.priv } });
+      const res = await api("/ask", { method: "POST", body: { threadId: S.currentId, text, mode, files, private: S.priv, tz: Intl.DateTimeFormat().resolvedOptions().timeZone, ...(S.forceAccounts ? { useAccounts: true } : {}) } });
       if (S.currentId !== res.threadId) { S.currentId = res.threadId; local.set("thread", res.threadId); }
       S.messages.push(res.user, ...res.replies);
       pending.replaceWith(turnEl(res.user, res.replies));
@@ -386,7 +401,7 @@
       pending.querySelector(".answers").appendChild(answerEl({ role: "error", engine: mode === "all" ? "gemini" : mode, content: err.message }));
       if (!text) {} else if (!q.value) { q.value = text; grow(); }
     } finally {
-      S.busy = false; $("#send").disabled = false; setStatus("", "IDLE"); galaxyMain.setBusy(false);
+      S.busy = false; S.forceAccounts = false; $("#send").disabled = false; setStatus("", "IDLE"); galaxyMain.setBusy(false);
     }
   }
 
@@ -488,7 +503,7 @@
   function loadScript(src) {
     return new Promise((res, rej) => {
       if ([...document.scripts].some((s) => s.src === src)) return res();
-      const s = document.createElement("script"); s.src = src; s.onload = res; s.onerror = () => rej(new Error("Couldn't load the Word reader. Check your connection."));
+      const s = document.createElement("script"); s.src = src; s.onload = res; s.onerror = () => rej(new Error("Couldn't load a needed script. Check your connection."));
       document.head.appendChild(s);
     });
   }
@@ -556,6 +571,116 @@
     const old = btn.textContent; btn.textContent = ok ? "Copied" : "Select and copy manually"; btn.classList.toggle("done", ok);
     setTimeout(() => { btn.textContent = old; btn.classList.remove("done"); }, 1500);
   }
+
+  /* ---------------- google ---------------- */
+  function toast(msg, ms = 5000) {
+    const t = $("#toast"); t.textContent = msg; t.hidden = false;
+    clearTimeout(toast.timer); toast.timer = setTimeout(() => (t.hidden = true), ms);
+  }
+  function renderGoogle() {
+    const g = S.google;
+    $("#googleHint").hidden = g.ready;
+    $("#connectBtn").hidden = !g.ready;
+    $("#connectBtn").textContent = g.accounts.length ? "+ Add another account" : "+ Connect Google account";
+    $("#briefBtn").hidden = !g.accounts.length;
+    $("#libraryPanel").hidden = !g.accounts.length;
+    $("#addDrive").hidden = !g.picker;
+    const ul = $("#accts"); ul.innerHTML = "";
+    g.accounts.forEach((a) => {
+      const li = document.createElement("li");
+      const bad = a.status !== "ok";
+      li.innerHTML = `<span class="acct-dot ${bad ? "bad" : ""}"></span><span class="em"></span>` +
+        (bad ? `<a class="link reconnect" href="/api/google/start">Reconnect</a>` : `<button class="x" type="button" aria-label="Disconnect">×</button>`);
+      li.querySelector(".em").textContent = a.email;
+      const x = li.querySelector(".x");
+      if (x) x.onclick = async () => {
+        if (!x.classList.contains("confirm")) { x.classList.add("confirm"); x.textContent = "Disconnect?"; setTimeout(() => { x.classList.remove("confirm"); x.textContent = "×"; }, 3000); return; }
+        try { await api(`/google/accounts/${encodeURIComponent(a.email)}`, { method: "DELETE" }); toast(`Disconnected ${a.email}.`); sync(); } catch (err) { toast(err.message); }
+      };
+      ul.appendChild(li);
+    });
+    const lib = $("#library"); lib.innerHTML = "";
+    if (!g.library.length) lib.innerHTML = `<li class="empty" style="display:block">Nothing here yet.</li>`;
+    g.library.forEach((f) => {
+      const li = document.createElement("li");
+      const kind = /document/.test(f.mime) ? "doc" : /spreadsheet/.test(f.mime) ? "sheet" : /presentation/.test(f.mime) ? "slides" : /pdf/.test(f.mime) ? "pdf" : "file";
+      li.innerHTML = `<span class="ftype">${kind}</span>${f.url ? `<a class="nm" target="_blank" rel="noopener"></a>` : `<span class="nm"></span>`}<button class="x" type="button" aria-label="Remove from library">×</button>`;
+      const nm = li.querySelector(".nm"); nm.textContent = f.name; if (f.url) nm.href = f.url;
+      li.querySelector(".x").onclick = async () => {
+        S.google.library = S.google.library.filter((y) => y.id !== f.id); renderGoogle();
+        try { await api(`/library/${encodeURIComponent(f.id)}`, { method: "DELETE" }); } catch (err) { toast(err.message); }
+      };
+      lib.appendChild(li);
+    });
+  }
+  $("#connectBtn").onclick = () => { location.href = "/api/google/start"; };
+  $("#briefBtn").onclick = () => {
+    setView("ask");
+    S.forceAccounts = true;
+    $("#q").value = "Give me my morning brief: today's schedule across all my calendars, anything important or unread in my email from the last day, and my open tasks. Keep it short and scannable.";
+    grow(); send();
+  };
+
+  async function saveToDrive(btn, content) {
+    let account = S.google.accounts[0]?.email;
+    if (S.google.accounts.length > 1) {
+      const pick = await chooseAccount(btn, "Save to which account?"); if (!pick) return; account = pick;
+    }
+    const firstLine = String(content).split("\n").find((l) => l.trim()) || "Sobriazar note";
+    const title = firstLine.replace(/^#+\s*|\*\*/g, "").slice(0, 80);
+    btn.disabled = true; btn.textContent = "Saving…";
+    try {
+      const res = await api("/drive/save", { method: "POST", body: { account, title, content } });
+      S.google.library = res.library; renderGoogle();
+      const link = document.createElement("a"); link.className = "act link-out done"; link.href = res.doc.url; link.target = "_blank"; link.rel = "noopener"; link.textContent = "Saved · Open in Drive";
+      btn.replaceWith(link);
+    } catch (err) { btn.disabled = false; btn.textContent = "Save to Drive"; toast(err.message); }
+  }
+
+  function chooseAccount(anchor, label) {
+    return new Promise((resolve) => {
+      const box = document.createElement("div"); box.className = "actions";
+      const lab = document.createElement("span"); lab.className = "hint"; lab.style.margin = "0"; lab.textContent = label; box.appendChild(lab);
+      S.google.accounts.forEach((a) => {
+        const b = document.createElement("button"); b.type = "button"; b.className = "act"; b.textContent = a.email;
+        b.onclick = () => { box.remove(); anchor.hidden = false; resolve(a.email); }; box.appendChild(b);
+      });
+      const c = document.createElement("button"); c.type = "button"; c.className = "act"; c.textContent = "Cancel";
+      c.onclick = () => { box.remove(); anchor.hidden = false; resolve(null); }; box.appendChild(c);
+      anchor.hidden = true; anchor.after(box);
+    });
+  }
+
+  $("#addDrive").onclick = async () => {
+    const btn = $("#addDrive");
+    let account = S.google.accounts[0]?.email;
+    if (S.google.accounts.length > 1) { account = await chooseAccount(btn, "Pick from which account?"); if (!account) return; }
+    try {
+      const cfg = await api(`/google/picker?account=${encodeURIComponent(account)}`);
+      await loadScript("https://apis.google.com/js/api.js");
+      await new Promise((res) => window.gapi.load("picker", res));
+      const P = window.google.picker;
+      const view = new P.DocsView(P.ViewId.DOCS).setIncludeFolders(true).setSelectFolderEnabled(false).setMode(P.DocsViewMode.LIST);
+      const picker = new P.PickerBuilder()
+        .addView(view)
+        .enableFeature(P.Feature.MULTISELECT_ENABLED)
+        .setOAuthToken(cfg.token).setDeveloperKey(cfg.apiKey).setAppId(cfg.appId)
+        .setTitle("Add files to Sobriazar")
+        .setCallback(async (data) => {
+          if (data[P.Response.ACTION] !== P.Action.PICKED) return;
+          const files = data[P.Response.DOCUMENTS].map((d) => ({ id: d[P.Document.ID], name: d[P.Document.NAME], mimeType: d[P.Document.MIME_TYPE], url: d[P.Document.URL] }));
+          try { const res = await api("/library", { method: "POST", body: { account, files } }); S.google.library = res.library; renderGoogle(); toast(`Added ${files.length} file${files.length === 1 ? "" : "s"} to your library.`); }
+          catch (err) { toast(err.message); }
+        })
+        .build();
+      picker.setVisible(true);
+    } catch (err) { toast(err.message || "Couldn't open the Drive picker."); }
+  };
+
+  (function googleReturn() {
+    const p = new URLSearchParams(location.search);
+    if (p.has("google")) { const msg = p.get("google"); history.replaceState(null, "", "/"); setTimeout(() => toast(msg, 7000), 600); }
+  })();
 
   /* ---------------- views (phones / fold) ---------------- */
   function setView(v) {

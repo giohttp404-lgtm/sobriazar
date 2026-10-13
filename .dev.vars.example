@@ -6,3 +6,5 @@ GEMINI_API_KEY=
 ANTHROPIC_API_KEY=
 # Optional: your Meta Model API key from dev.meta.ai (adds the M source)
 META_API_KEY=
+# Google sign-in (Calendar, Gmail, Drive): the OAuth client secret from Google Cloud
+GOOGLE_CLIENT_SECRET=

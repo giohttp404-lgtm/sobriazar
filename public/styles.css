@@ -269,6 +269,28 @@ body.chatting .convo { display: block; flex: 1 1 auto; }
 
 .drop { position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; background: rgba(6,7,10,.8); border: 2px dashed var(--dim); font: 14px var(--mono); letter-spacing: .16em; text-transform: uppercase; }
 
+/* ---------- accounts & library ---------- */
+.accts, .library { list-style: none; margin: 0 0 8px; padding: 0; display: grid; gap: 2px; }
+.accts li, .library li { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; align-items: center; padding: 6px 4px; border-radius: 6px; font-size: 13.5px; }
+.accts li:hover, .library li:hover { background: var(--panel); }
+.accts .em, .library .nm { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.library a.nm { color: var(--fg); text-decoration: none; }
+.library a.nm:hover { text-decoration: underline; }
+.acct-dot { width: 7px; height: 7px; border-radius: 50%; background: var(--best); box-shadow: 0 0 6px var(--best); }
+.acct-dot.bad { background: var(--warn); box-shadow: none; }
+.ftype { font: 9.5px var(--mono); color: var(--faint); border: 1px solid var(--line); border-radius: 4px; padding: 1px 4px; text-transform: uppercase; }
+.accts .reconnect { font: 11px var(--mono); }
+.acct-actions { display: flex; gap: 6px; flex-wrap: wrap; }
+.hint { color: var(--faint); font-size: 12px; margin: 0 0 8px; }
+.used { display: flex; gap: 6px; flex-wrap: wrap; }
+.used span { font: 10.5px var(--mono); color: var(--dim); border: 1px dashed var(--line-hi); border-radius: 4px; padding: 2px 6px; }
+.act.link-out { text-decoration: none; display: inline-flex; align-items: center; }
+.toast {
+  position: fixed; left: 50%; bottom: calc(90px + env(safe-area-inset-bottom, 0px)); transform: translateX(-50%); z-index: 60;
+  background: var(--raise); border: 1px solid var(--line-hi); border-radius: 10px; padding: 10px 14px; font-size: 13.5px;
+  max-width: min(520px, calc(100vw - 32px)); box-shadow: 0 8px 30px rgba(0,0,0,.5);
+}
+
 /* ---------- shortcut editor ---------- */
 .edit-skills { margin: 0 0 0 auto; text-transform: none; letter-spacing: .04em; }
 .skills-strip .skill.edit { color: var(--dim); border-style: dashed; }

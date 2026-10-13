@@ -68,6 +68,23 @@
       </div>
     </section>
 
+    <section class="panel" id="accountsPanel">
+      <h2 class="label">Accounts <span>google</span></h2>
+      <ul class="accts" id="accts"></ul>
+      <div class="acct-actions">
+        <button class="btn" type="button" id="connectBtn">+ Connect Google account</button>
+        <button class="btn ghost" type="button" id="briefBtn" hidden>Morning brief</button>
+      </div>
+      <p class="hint" id="googleHint" hidden>Google sign-in isn't set up on the server yet.</p>
+    </section>
+
+    <section class="panel" id="libraryPanel" hidden>
+      <h2 class="label">Library <span>drive</span></h2>
+      <p class="hint">The only Drive files Sobriazar can see. Saved answers land here too.</p>
+      <ul class="library" id="library"></ul>
+      <button class="btn" type="button" id="addDrive">+ Add from Drive</button>
+    </section>
+
     <section class="panel">
       <h2 class="label">Directives <span id="taskCount"></span></h2>
       <form id="todoForm" class="todo-add">
@@ -156,7 +173,7 @@
   <nav class="tabbar" aria-label="Sections">
     <button type="button" data-view="ask"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><circle cx="12" cy="12" r="8"/></svg>Ask</button>
     <button type="button" data-view="history"><svg viewBox="0 0 24 24"><path d="M4 6h16M4 12h16M4 18h10"/></svg>History</button>
-    <button type="button" data-view="tasks"><svg viewBox="0 0 24 24"><path d="m5 12 4 4 10-10"/></svg>Tasks</button>
+    <button type="button" data-view="tasks"><svg viewBox="0 0 24 24"><path d="m5 12 4 4 10-10"/></svg>Hub</button>
   </nav>
 </div>
 
@@ -185,6 +202,8 @@
     </footer>
   </form>
 </dialog>
+
+<div class="toast" id="toast" role="status" hidden></div>
 
 <div class="drop" id="drop" hidden><span>Drop files to attach</span></div>
 
