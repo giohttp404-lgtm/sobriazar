@@ -55,7 +55,7 @@
     $("#pkBtn").hidden = !pk; $("#pkOr").hidden = !pk;
     $("#loginErr").textContent = "";
     galaxyLogin.start(); galaxyMain.stop();
-    if (pk && !showLogin.autoTried) { showLogin.autoTried = true; setTimeout(unlockWithPasskey, 250); }
+    if (pk && !showLogin.autoTried && local.get("pkAuto", true)) { showLogin.autoTried = true; autoPasskey(); }
     else setTimeout(() => { if (!pk) $("#pw").focus(); }, 50);
   }
   function showLock() { if (!$("#login").hidden && document.body.classList.contains("is-locked")) return; showLogin.autoTried = false; showLogin(true); }
@@ -122,7 +122,19 @@
       if (err.name !== "NotAllowedError") toast(err.message || "Couldn't set up Face ID / fingerprint.");
     }
   }
-  async function unlockWithPasskey() {
+  // Only pop the Face ID / fingerprint prompt when you're actually looking at the page. Locking while the tab sits in the
+  // background used to start the prompt with nobody there, and the browser showed "The request timed out".
+  function autoPasskey() {
+    const go = () => {
+      if (document.hidden || !document.hasFocus() || $("#login").hidden) return false;
+      window.removeEventListener("focus", tryGo); document.removeEventListener("visibilitychange", tryGo);
+      setTimeout(() => unlockWithPasskey(true), 250); return true;
+    };
+    const tryGo = () => go();
+    if (!go()) { window.addEventListener("focus", tryGo); document.addEventListener("visibilitychange", tryGo); }
+  }
+  async function unlockWithPasskey(auto) {
+    auto = auto === true;
     $("#loginErr").textContent = "";
     try {
       const o = await api("/passkey/login/options", { method: "POST", body: {} });
@@ -135,13 +147,15 @@
         authenticatorAttachment: cred.authenticatorAttachment,
         response: { clientDataJSON: b64u.fromBuf(r.clientDataJSON), authenticatorData: b64u.fromBuf(r.authenticatorData), signature: b64u.fromBuf(r.signature), userHandle: r.userHandle ? b64u.fromBuf(r.userHandle) : undefined },
       } } });
+      local.set("pkAuto", true);
       markActive(); document.body.classList.remove("is-locked"); showApp(); await sync(true);
     } catch (err) {
+      if (auto) { local.set("pkAuto", false); $("#loginErr").textContent = ""; return; } // this browser's prompt didn't work; stop popping it up, the button still works
       if (err.name === "NotAllowedError") $("#loginErr").textContent = "Face ID was cancelled. Tap the button to try again, or use your password.";
       else $("#loginErr").textContent = err.message || "Couldn't unlock. Use your password.";
     }
   }
-  $("#pkBtn").onclick = unlockWithPasskey;
+  $("#pkBtn").onclick = () => unlockWithPasskey(false);
   $("#pkSetup").onclick = setupPasskey;
   $("#lockNow").onclick = lockNow;
   async function renderSecurity() {
