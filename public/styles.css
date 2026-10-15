@@ -424,3 +424,15 @@ body.chatting .convo { display: block; flex: 1 1 auto; }
 @media (prefers-reduced-motion: reduce) {
   * { transition: none !important; animation: none !important; }
 }
+
+/* ---------- email ready to send ---------- */
+.sendfrom { display: flex; align-items: center; gap: 8px; margin: 2px 0 10px; font: 11.5px var(--mono); color: var(--dim); flex-wrap: wrap; }
+.sendfrom select { background: var(--raise); color: var(--fg); border: 1px solid var(--line-hi); border-radius: 6px; padding: 5px 8px; font: 12px var(--mono); max-width: 100%; }
+.mailcard { border: 1px solid var(--line-hi); border-radius: var(--r); background: var(--panel); padding: 10px 12px; margin: 10px 0 8px; display: grid; gap: 6px; }
+.mailcard .meta { font: 11.5px var(--mono); color: var(--dim); display: grid; gap: 2px; overflow-wrap: anywhere; }
+.mailcard .meta b { color: var(--fg); font-weight: 500; }
+.mailcard .state { font: 11.5px var(--mono); color: var(--ice); }
+.mailcard.sent .state { color: var(--best); }
+.mailcard.off .state { color: var(--faint); }
+.act.send { color: var(--void); background: var(--best); border-color: var(--best); font-weight: 500; }
+.act.send:hover { color: var(--void); filter: brightness(1.1); }

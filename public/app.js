@@ -25,7 +25,7 @@
 
   const S = {
     threads: [], todos: [], currentId: null, messages: [], mode: ((m) => (m === "both" ? "all" : m))(local.get("autoIntro", false) ? local.get("mode", "auto") : (local.set("autoIntro", true), local.set("mode", "auto"), "auto")), keys: { gemini: true, claude: true, muse: false },
-    google: { ready: false, picker: false, accounts: [], library: [] }, forceAccounts: false,
+    google: { ready: false, picker: false, accounts: [], library: [] }, forceAccounts: false, sendFrom: null,
     priv: local.get("priv", false), files: [],
     skills: local.get("skills", null) || DEFAULT_SKILLS, skillUses: local.get("skillUses", {}), skillSort: local.get("skillSort", "used"), busy: false, notesDirty: false, budget: 5, lastSync: 0,
   };
@@ -192,7 +192,7 @@
       renderSkills();
     }
     S.keys = st.keys || S.keys;
-    S.google = st.google || S.google; renderGoogle();
+    S.google = st.google || S.google; S.sendFrom = st.sendFrom || null; renderGoogle();
     if (S.mode === "muse" && !S.keys.muse) { S.mode = "gemini"; local.set("mode", S.mode); }
     renderMode();
     renderUsage(st.usage); renderHistory(); renderTodos();
@@ -464,6 +464,8 @@
       [...new Set(usedList.map((f) => f.name))].forEach((n) => { const sp = document.createElement("span"); sp.textContent = "Used " + n; u.appendChild(sp); });
       el.insertBefore(u, body);
     }
+    const mail = (m.files || []).find((f) => f.email);
+    if (mail && m.id) el.appendChild(mailCard(m.id, mail.email));
     const a = document.createElement("div"); a.className = "actions";
     a.innerHTML = `<button class="act" type="button">Copy</button><button class="act" type="button">Copy plain text</button>`;
     const [rich, plainBtn] = a.children;
@@ -520,7 +522,7 @@
     galaxyMain.resize();
 
     try {
-      const res = await api("/ask", { method: "POST", body: { threadId: S.currentId, text, mode, files, private: S.priv, tz: Intl.DateTimeFormat().resolvedOptions().timeZone, ...(S.forceAccounts ? { useAccounts: true } : {}) } });
+      const res = await api("/ask", { method: "POST", body: { threadId: S.currentId, text, mode, files, private: S.priv, voice: Boolean(voice.turn), tz: Intl.DateTimeFormat().resolvedOptions().timeZone, ...(S.forceAccounts ? { useAccounts: true } : {}) } });
       if (S.currentId !== res.threadId) { S.currentId = res.threadId; local.set("thread", res.threadId); }
       S.messages.push(res.user, ...res.replies);
       pending.replaceWith(turnEl(res.user, res.replies));
@@ -729,6 +731,13 @@
       };
       ul.appendChild(li);
     });
+    const sel = $("#sendFrom");
+    $("#sendFromRow").hidden = g.accounts.length < 1;
+    if (document.activeElement !== sel) {
+      sel.innerHTML = "";
+      g.accounts.forEach((a) => { const o = document.createElement("option"); o.value = a.email; o.textContent = a.email; sel.appendChild(o); });
+      if (S.sendFrom) sel.value = S.sendFrom;
+    }
     const lib = $("#library"); lib.innerHTML = "";
     if (!g.library.length) lib.innerHTML = `<li class="empty" style="display:block">Nothing here yet.</li>`;
     g.library.forEach((f) => {
@@ -744,6 +753,11 @@
     });
   }
   $("#connectBtn").onclick = () => { location.href = "/api/google/start"; };
+  $("#sendFrom").onchange = async (e) => {
+    const v = e.target.value;
+    try { await api("/settings", { method: "PUT", body: { sendFrom: v } }); S.sendFrom = v; toast(`Emails will send from ${v}.`); }
+    catch (err) { toast(err.message); e.target.value = S.sendFrom || ""; }
+  };
   $("#briefBtn").onclick = () => {
     setView("ask");
     S.forceAccounts = true;
@@ -827,9 +841,11 @@
     try { window.speechSynthesis && speechSynthesis.cancel(); } catch {}
     voice.active = false; voice.rec = null; $("#micBtn").classList.remove("on"); voiceBar("", false);
   }
-  $("#voiceStop").onclick = () => { voice.turn = false; voice.convo = false; stopVoice(); };
+  $("#voiceStop").onclick = () => { if (voice.countdown) { voice.countdown.cancel(); return; } voice.turn = false; voice.convo = false; voice.email = null; stopVoice(); };
 
   function startListening() {
+    if (voice.countdown) { voice.countdown.cancel(); return; }
+    if (voice.once) { try { voice.once.abort(); } catch {} return; }
     if (!SR || $("#app").hidden) return;
     if (voice.active) { voice.convo = false; stopVoice(); return; }
     voice.convo = true;
@@ -870,16 +886,16 @@
     const lang = (navigator.language || "en-US").slice(0, 2);
     return vs.find((v) => /Google US English|Samantha|Ava|Natural/i.test(v.name) && v.lang.startsWith(lang)) || vs.find((v) => v.lang.startsWith(lang)) || null;
   }
-  function speak(text) {
-    if (!window.speechSynthesis || !text) return;
+  function speak(text, then) {
+    if (!window.speechSynthesis || !text) { if (then) then(); return; }
     let t = text; if (t.length > 1600) { const cut = t.lastIndexOf(".", 1600); t = t.slice(0, cut > 400 ? cut + 1 : 1600) + " The rest is on screen."; }
     speechSynthesis.cancel();
     const u = new SpeechSynthesisUtterance(t);
     const v = pickVoice(); if (v) u.voice = v;
     u.rate = 1.05;
     u.onstart = () => voiceBar("Speaking…");
-    u.onend = () => { voiceBar("", false); listenAgain(); };
-    u.onerror = () => voiceBar("", false);
+    u.onend = () => { voiceBar("", false); if (then) then(); else listenAgain(); };
+    u.onerror = () => { voiceBar("", false); if (then) then(); };
     speechSynthesis.speak(u);
   }
   function listenAgain() {
@@ -895,8 +911,151 @@
     const order = ["best", "claude", "gemini", "muse"];
     const r = replies.filter((x) => x.role === "assistant").sort((a, b) => order.indexOf(a.engine) - order.indexOf(b.engine))[0];
     if (!window.speechSynthesis) { listenAgain(); return; }
+    const ready = replies.find((x) => x.role === "assistant" && openEmail(x));
+    if (ready) { readBackEmail(ready); return; }
     if (r) speak(speakable(r.content));
     else if (replies[0]) speak(String(replies[0].content).replace(/^⚠\s*/, ""));
+  }
+
+  /* ---------------- email: read back, "send it / change it / cancel", 5-second cancel window ---------------- */
+  const SEND_RE = /^(?:yes|yeah|yep|ok(?:ay)?|sure|great|perfect|good)?[,.!\s]*(?:please\s+)?(?:send(?: it| that| the email| the reply)?(?: now)?|go ahead(?: and send(?: it)?)?|ship it)(?:\s*,?\s*please)?[.!]*$/i;
+  const CANCEL_RE = /^(?:no|nope|cancel|cancel it|don'?t send(?: it)?|never ?mind|scratch that|forget it|stop|delete it|discard(?: it)?)(?:[,.!\s].*)?$/i;
+  const AGAIN_RE = /^(?:read it (?:again|back)|again|repeat(?: that)?|what did it say|say that again)[.!?]*$/i;
+  const CHANGE_ONLY_RE = /^(?:change(?: it| that)?|edit(?: it)?|i want to change (?:it|something))[.!]*$/i;
+  const CANCEL_WORD = /\b(cancel|stop|wait|don'?t|no)\b/i;
+
+  function openEmail(m) {
+    const e = (m.files || []).find((f) => f.email)?.email;
+    return e && !e.sentAt && !e.canceledAt ? e : null;
+  }
+  function sayEmail(addr) { return String(addr || "").replace(/@/g, " at ").replace(/\./g, " dot "); }
+
+  function mailCard(mid, e) {
+    const card = document.createElement("div"); card.className = "mailcard"; card.dataset.mid = mid;
+    card.innerHTML = `<div class="meta"><span>To <b class="to"></b></span><span>From <b class="from"></b></span><span>Subject <b class="subj"></b></span></div><div class="state"></div><div class="actions"></div>`;
+    card.querySelector(".to").textContent = e.to; card.querySelector(".from").textContent = e.from; card.querySelector(".subj").textContent = e.subject || "(no subject)";
+    paintCard(card, e.sentAt ? "sent" : e.canceledAt ? "canceled" : "ready");
+    return card;
+  }
+  function paintCard(card, state, extra) {
+    if (!card) return;
+    const st = card.querySelector(".state"), act = card.querySelector(".actions");
+    card.classList.toggle("sent", state === "sent"); card.classList.toggle("off", state === "canceled");
+    act.innerHTML = "";
+    if (state === "sent") { st.textContent = "✓ Sent"; return; }
+    if (state === "canceled") { st.textContent = "Not sent"; return; }
+    if (state === "sending") { st.textContent = "Sending…"; return; }
+    if (state === "countdown") {
+      st.textContent = `Sending in ${extra}…`;
+      const c = document.createElement("button"); c.type = "button"; c.className = "act"; c.textContent = "Cancel";
+      c.onclick = () => voice.countdown && voice.countdown.cancel(); act.appendChild(c); return;
+    }
+    st.textContent = "Ready to send. Nothing has been sent.";
+    const send = document.createElement("button"); send.type = "button"; send.className = "act send"; send.textContent = "Send";
+    send.onclick = () => countdownSend(card.dataset.mid, false);
+    const no = document.createElement("button"); no.type = "button"; no.className = "act"; no.textContent = "Don't send";
+    no.onclick = () => cancelEmail(card.dataset.mid, false);
+    act.append(send, no);
+  }
+  const cardFor = (mid) => document.querySelector(`.mailcard[data-mid="${CSS.escape(mid)}"]`);
+  function emailFor(mid) { const m = S.messages.find((x) => x.id === mid); return m && (m.files || []).find((f) => f.email)?.email; }
+
+  function readBackEmail(m) {
+    const e = openEmail(m);
+    voice.email = { mid: m.id, tries: 0 };
+    speak(`${speakable(m.content)} It goes to ${e.toName || sayEmail(e.to)}, from ${sayEmail(e.from)}. Send it, change it, or cancel?`, () => askConfirm());
+  }
+  function askConfirm() {
+    if (!voice.email) return;
+    listenOnce("Say “send it”, “change it”, or “cancel”", (text) => handleConfirm(text));
+  }
+  function handleConfirm(raw) {
+    const st = voice.email; if (!st) return;
+    const text = String(raw || "").trim();
+    if (!text) {
+      if (++st.tries >= 2) { voice.email = null; speak("I'll leave it on screen. Nothing was sent.", () => {}); return; }
+      speak("Send it, change it, or cancel?", () => askConfirm()); return;
+    }
+    if (SEND_RE.test(text)) { voice.email = null; countdownSend(st.mid, true); return; }
+    if (CANCEL_RE.test(text)) { voice.email = null; cancelEmail(st.mid, true); return; }
+    if (AGAIN_RE.test(text)) { const m = S.messages.find((x) => x.id === st.mid); if (m) readBackEmail(m); return; }
+    if (CHANGE_ONLY_RE.test(text)) { speak("What should I change?", () => listenOnce("Say what to change…", (t) => { if (!t) { askConfirm(); return; } voice.email = null; askChange(t); })); return; }
+    voice.email = null; askChange(text);
+  }
+  function askChange(text) {
+    q.value = /^(change|make|add|remove|take out|say|instead|shorter|longer)/i.test(text) ? text : `Change the email: ${text}`;
+    grow(); voice.turn = true; voice.convo = true; send();
+  }
+
+  function listenOnce(label, done) {
+    if (!SR) { done(""); return; }
+    try { window.speechSynthesis && speechSynthesis.cancel(); } catch {}
+    const rec = new SR();
+    rec.lang = navigator.language || "en-US"; rec.interimResults = true; rec.continuous = false; rec.maxAlternatives = 1;
+    let heard = "", finished = false;
+    voice.once = rec; $("#micBtn").classList.add("on"); voiceBar(label);
+    rec.onresult = (e) => { heard = [...e.results].map((r) => r[0].transcript).join(" ").trim(); voiceBar(heard || label); markActive(); };
+    rec.onerror = (e) => { if (e.error === "not-allowed") toast("Sobriazar needs microphone access."); };
+    rec.onend = () => { if (finished) return; finished = true; voice.once = null; $("#micBtn").classList.remove("on"); voiceBar("", false); done(heard); };
+    try { rec.start(); } catch { voice.once = null; done(""); }
+  }
+
+  function countdownSend(mid, spoken) {
+    const e = emailFor(mid);
+    if (!e || e.sentAt || e.canceledAt || voice.countdown) return;
+    const card = cardFor(mid);
+    let left = 5, canceled = false, over = false, rec = null, tick = null;
+    const finish = () => {
+      if (over) return; over = true;
+      clearInterval(tick); voice.countdown = null;
+      if (rec) { try { rec.abort(); } catch {} rec = null; }
+      $("#micBtn").classList.remove("on"); voiceBar("", false);
+      if (canceled) cancelEmail(mid, spoken); else reallySend(mid, spoken);
+    };
+    voice.countdown = { cancel: () => { canceled = true; finish(); } };
+    const listen = () => {
+      if (!SR || !spoken || over) return;
+      rec = new SR(); rec.lang = navigator.language || "en-US"; rec.interimResults = true; rec.continuous = true;
+      rec.onresult = (ev) => { const t = [...ev.results].map((r) => r[0].transcript).join(" "); if (CANCEL_WORD.test(t)) { canceled = true; finish(); } };
+      rec.onend = () => { rec = null; if (!over && left > 0) listen(); }; // phones end listening early; keep it open for the full 5 seconds
+      try { rec.start(); $("#micBtn").classList.add("on"); } catch {}
+    };
+    const startClock = () => {
+      if (over) return;
+      paintCard(card, "countdown", left); voiceBar(`Sending in ${left}… say “cancel” to stop`);
+      listen();
+      tick = setInterval(() => {
+        left -= 1;
+        if (left <= 0) { finish(); return; }
+        paintCard(card, "countdown", left); voiceBar(`Sending in ${left}… say “cancel” to stop`);
+      }, 1000);
+    };
+    paintCard(card, "countdown", left);
+    if (spoken) speak(`Sending from ${sayEmail(e.from)} in 5 seconds. Say cancel to stop.`, startClock);
+    else startClock();
+  }
+
+  async function reallySend(mid, spoken) {
+    const card = cardFor(mid); paintCard(card, "sending");
+    try {
+      const res = await api("/email/send", { method: "POST", body: { messageId: mid } });
+      const e = emailFor(mid); if (e) e.sentAt = res.email.sentAt || Date.now();
+      paintCard(card, "sent");
+      const who = res.email.toName || res.email.to;
+      if (spoken) speak(`Sent to ${who}.`, () => { voice.convo = false; });
+      else toast(`Sent to ${who} from ${res.email.from}.`);
+      sync();
+    } catch (err) {
+      paintCard(card, "ready");
+      if (spoken) speak(`It didn't send. ${err.message}`, () => {}); else toast(err.message);
+    }
+  }
+  async function cancelEmail(mid, spoken) {
+    const e = emailFor(mid); if (e) e.canceledAt = Date.now();
+    paintCard(cardFor(mid), "canceled");
+    if (spoken) speak("Canceled. Nothing was sent.", () => { voice.convo = false; });
+    else toast("Canceled. Nothing was sent.");
+    try { await api("/email/cancel", { method: "POST", body: { messageId: mid } }); } catch {}
   }
 
   // Glasses mode: keep a silent media session so a tap on the glasses (play/pause) starts listening.

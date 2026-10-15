@@ -1,6 +1,8 @@
 // Google accounts for Sobriazar: sign-in, token storage, and the Calendar / Gmail / Drive tools the assistant can use.
-// Scopes are deliberately narrow: calendar read-only, Gmail read + compose (drafts only, never send), Drive "drive.file"
+// Scopes are deliberately narrow: calendar read-only, Gmail read + compose, Drive "drive.file"
 // (only files you pick in the Drive picker or files Sobriazar creates itself).
+// Email is only ever sent by /api/email/send, after the user hears the final version and says "send it".
+// The assistant itself can only prepare an email; it has no tool that sends.
 
 export const SCOPES = [
   "openid",
@@ -255,6 +257,21 @@ export const TOOLS = [
     }, required: ["account", "body"] },
   },
   {
+    name: "gmail_my_style",
+    description: "Get a few of the user's recent sent emails from their send-from account, to copy how they write (greeting, sign-off, length, tone). Call this before writing any email the user will send.",
+    input_schema: { type: "object", properties: {} },
+  },
+  {
+    name: "email_prepare",
+    description: "Prepare an email or reply for the user to SEND. It is NOT sent: the app reads it back to the user, says which address it sends from, and the user must say \"send it\". Use reply_to_id + reply_to_account (from gmail_search) for a reply; the recipient and Re: subject fill in automatically. Write the body in the user's own style (call gmail_my_style first). Plain text, no signature placeholders like [Name].",
+    input_schema: { type: "object", properties: {
+      body: { type: "string", description: "Plain text body, exactly as it will be sent." },
+      reply_to_id: { type: "string" }, reply_to_account: { type: "string" },
+      to: { type: "string", description: "Only for a new email (not a reply): recipient address." },
+      subject: { type: "string", description: "Only for a new email." },
+    }, required: ["body"] },
+  },
+  {
     name: "drive_library",
     description: "List the files the user has added to their Sobriazar Drive library (the only Drive files Sobriazar can see), plus files Sobriazar saved.",
     input_schema: { type: "object", properties: {} },
@@ -277,7 +294,7 @@ export const TOOLS = [
 ];
 
 export const TOOL_LABELS = {
-  calendar_events: "Calendar", gmail_search: "Gmail", gmail_read: "Gmail", gmail_create_draft: "Gmail draft",
+  calendar_events: "Calendar", gmail_search: "Gmail", gmail_read: "Gmail", gmail_create_draft: "Gmail draft", gmail_my_style: "Your writing style", email_prepare: "Email ready",
   drive_library: "Drive", drive_read: "Drive", drive_save_doc: "Saved to Drive", tasks_list: "Tasks",
 };
 
@@ -359,25 +376,38 @@ export async function runTool(env, name, input, ctx) {
 
     case "gmail_create_draft": {
       const [a] = pickAccounts(accounts, input.account || accounts[0]?.email);
-      let to = input.to || "", subject = input.subject || "", threadId, refs = "";
-      if (input.reply_to_id) {
-        const m = await gfetch(env, a.email, `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(input.reply_to_id)}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Message-ID&metadataHeaders=Reply-To`);
-        const h = Object.fromEntries((m.payload?.headers || []).map((x) => [x.name.toLowerCase(), x.value]));
-        threadId = m.threadId;
-        to = to || h["reply-to"] || h.from || "";
-        subject = subject || (/^re:/i.test(h.subject || "") ? h.subject : `Re: ${h.subject || ""}`);
-        if (h["message-id"]) refs = h["message-id"];
-      }
-      const encSubj = /[^\x20-\x7e]/.test(subject) ? `=?UTF-8?B?${b64urlEncodeUtf8(subject).replace(/-/g, "+").replace(/_/g, "/")}?=` : subject;
-      const raw = [
-        to ? `To: ${to}` : "", `Subject: ${encSubj}`, refs ? `In-Reply-To: ${refs}` : "", refs ? `References: ${refs}` : "",
-        "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: 8bit", "", String(input.body || ""),
-      ].filter((l, i, arr) => l !== "" || i === arr.length - 2).join("\r\n");
+      const h = input.reply_to_id ? await replyHeaders(env, a.email, input.reply_to_id) : {};
+      const to = input.to || h.to || "", subject = input.subject || h.subject || "";
+      const raw = buildRaw({ to, subject, refs: h.refs, body: input.body });
       const d = await gfetch(env, a.email, "https://gmail.googleapis.com/gmail/v1/users/me/drafts", {
         method: "POST", headers: { "content-type": "application/json" },
-        body: JSON.stringify({ message: { raw: b64urlEncodeUtf8(raw), ...(threadId ? { threadId } : {}) } }),
+        body: JSON.stringify({ message: { raw: b64urlEncodeUtf8(raw), ...(h.threadId ? { threadId: h.threadId } : {}) } }),
       });
       return `Draft created in ${a.email} (not sent). Draft id ${d.id}. Open drafts: https://mail.google.com/mail/u/${encodeURIComponent(a.email)}/#drafts`;
+    }
+
+    case "gmail_my_style": {
+      const from = ctx.sendFrom;
+      if (!from) return "No send-from account.";
+      return `Recent emails the user wrote (from ${from}):\n\n${await styleSamples(env, from)}`;
+    }
+
+    case "email_prepare": {
+      const from = ctx.sendFrom;
+      if (!from) throw gErr(400, "No Google account is connected to send from.");
+      let to = String(input.to || "").trim(), subject = String(input.subject || "").trim(), replyTo = null, toName = "";
+      if (input.reply_to_id) {
+        const [ra] = pickAccounts(accounts, input.reply_to_account || from);
+        const h = await replyHeaders(env, ra.email, input.reply_to_id);
+        to = to || h.to; subject = subject || h.subject;
+        replyTo = { account: ra.email, id: String(input.reply_to_id) };
+      }
+      if (!/@/.test(to)) throw gErr(400, "I need the recipient's email address (or a reply_to_id from gmail_search).");
+      toName = (to.match(/^\s*"?([^"<]+?)"?\s*</) || [])[1] || to.replace(/<|>/g, "");
+      const body = String(input.body || "").trim();
+      if (!body) throw gErr(400, "The email body is empty.");
+      ctx.pending = { from, to: to.slice(0, 300), toName: toName.trim().slice(0, 120), subject: subject.slice(0, 300), body: body.slice(0, 20000), replyTo };
+      return `Ready, NOT sent. It will go to ${to} from ${from}, subject "${subject}". In your answer: one short line saying who it's to, then the full body exactly as prepared. Don't ask whether to send; the app asks.`;
     }
 
     case "drive_library": {
@@ -404,6 +434,76 @@ export async function runTool(env, name, input, ctx) {
     }
   }
   throw gErr(400, `Unknown tool ${name}`);
+}
+
+/* ---------------- sending email (only from /api/email/send) ---------------- */
+
+function encodeHeader(v) {
+  return /[^\x20-\x7e]/.test(v) ? `=?UTF-8?B?${b64urlEncodeUtf8(v).replace(/-/g, "+").replace(/_/g, "/")}?=` : v;
+}
+function buildRaw({ to, subject, refs, body }) {
+  const clean = (v) => String(v || "").replace(/[\r\n]+/g, " ").trim();
+  return [
+    to ? `To: ${clean(to)}` : null, `Subject: ${encodeHeader(clean(subject))}`,
+    refs ? `In-Reply-To: ${clean(refs)}` : null, refs ? `References: ${clean(refs)}` : null,
+    "MIME-Version: 1.0", "Content-Type: text/plain; charset=UTF-8", "Content-Transfer-Encoding: 8bit", "", String(body || ""),
+  ].filter((l) => l !== null).join("\r\n");
+}
+async function replyHeaders(env, email, id) {
+  const m = await gfetch(env, email, `https://gmail.googleapis.com/gmail/v1/users/me/messages/${encodeURIComponent(id)}?format=metadata&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Message-ID&metadataHeaders=Reply-To`);
+  const h = Object.fromEntries((m.payload?.headers || []).map((x) => [x.name.toLowerCase(), x.value]));
+  const subj = h.subject || "";
+  return { threadId: m.threadId, to: h["reply-to"] || h.from || "", subject: /^re:/i.test(subj) ? subj : `Re: ${subj}`, refs: h["message-id"] || "" };
+}
+
+export function sendFromAccount(accounts, setting) {
+  const ok = accounts.filter((a) => a.status === "ok");
+  const pick = (e) => accounts.find((a) => a.email === e);
+  return (setting && pick(setting)?.email) || ok.find((a) => /giohttp/i.test(a.email))?.email || ok[0]?.email || accounts[0]?.email || null;
+}
+
+export async function sendEmail(env, { from, to, subject, body, replyTo }) {
+  let refs = "", threadId;
+  if (replyTo?.id && replyTo.account) {
+    const h = await replyHeaders(env, replyTo.account, replyTo.id).catch(() => ({}));
+    refs = h.refs || "";
+    if (replyTo.account === from) threadId = h.threadId; // same mailbox: keep it in the thread
+    else if (refs) {
+      // Different mailbox: find the same conversation there, if it exists, so the reply threads in Gmail too.
+      const found = await gfetch(env, from, `https://gmail.googleapis.com/gmail/v1/users/me/messages?${new URLSearchParams({ q: `rfc822msgid:${refs.replace(/[<>]/g, "")}`, maxResults: "1" })}`).catch(() => ({}));
+      threadId = found.messages?.[0]?.threadId;
+    }
+  }
+  const raw = buildRaw({ to, subject, refs, body });
+  const r = await gfetch(env, from, "https://gmail.googleapis.com/gmail/v1/users/me/messages/send", {
+    method: "POST", headers: { "content-type": "application/json" },
+    body: JSON.stringify({ raw: b64urlEncodeUtf8(raw), ...(threadId ? { threadId } : {}) }),
+  });
+  return { id: r.id, threadId: r.threadId };
+}
+
+// A few of the user's own recent sent emails (quoted replies stripped), cached for 12 hours.
+async function styleSamples(env, email) {
+  const key = `style:${email}`;
+  const row = await env.DB.prepare("SELECT value FROM settings WHERE key = ?").bind(key).first();
+  if (row) { try { const c = JSON.parse(row.value); if (Date.now() - c.at < 12 * 3600e3 && c.text) return c.text; } catch {} }
+  const list = await gfetch(env, email, `https://gmail.googleapis.com/gmail/v1/users/me/messages?${new URLSearchParams({ q: "in:sent -in:chats", maxResults: "12" })}`);
+  const msgs = await Promise.all((list.messages || []).map((m) => gfetch(env, email, `https://gmail.googleapis.com/gmail/v1/users/me/messages/${m.id}?format=full`).catch(() => null)));
+  const out = [];
+  for (const m of msgs) {
+    if (!m) continue;
+    let plain = "";
+    (function walk(p) { if (!p || plain) return; if (p.mimeType === "text/plain" && p.body?.data) plain = b64urlDecodeUtf8(p.body.data); (p.parts || []).forEach(walk); })(m.payload);
+    const lines = plain.split(/\r?\n/);
+    const cut = lines.findIndex((l) => /^On .+wrote:\s*$|^-{2,}\s*Original Message|^From: /i.test(l.trim()) || /^>/.test(l));
+    const own = (cut >= 0 ? lines.slice(0, cut) : lines).join("\n").replace(/\n{3,}/g, "\n\n").trim();
+    if (own.length < 15) continue;
+    out.push(own.slice(0, 700));
+    if (out.length >= 6) break;
+  }
+  const text = out.length ? out.map((t, i) => `--- Email ${i + 1} ---\n${t}`).join("\n\n") : "No recent sent emails found. Write short, friendly and direct.";
+  await env.DB.prepare("INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)").bind(key, JSON.stringify({ at: Date.now(), text })).run();
+  return text;
 }
 
 async function readDriveText(env, email, id, mime) {
