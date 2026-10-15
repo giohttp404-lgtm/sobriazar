@@ -99,8 +99,9 @@ svg { width: 18px; height: 18px; fill: none; stroke: currentColor; stroke-width:
 .left { border-right: 1px solid var(--line); }
 .right { border-left: 1px solid var(--line); }
 .brand { display: grid; gap: 6px; }
-.panel { display: flex; flex-direction: column; min-height: 0; }
-.panel.grow { flex: 1; }
+/* Sidebar panels keep their natural height; the column scrolls instead of squeezing them on top of each other. */
+.panel { display: flex; flex-direction: column; flex-shrink: 0; }
+.panel.grow { flex: 1 0 auto; }
 .tabbar { display: none; }
 
 /* ---------- usage ---------- */
