@@ -437,3 +437,9 @@ body.chatting .convo { display: block; flex: 1 1 auto; }
 .mailcard.off .state { color: var(--faint); }
 .act.send { color: var(--void); background: var(--best); border-color: var(--best); font-weight: 500; }
 .act.send:hover { color: var(--void); filter: brightness(1.1); }
+
+/* ---------- usage: hidden until you hover (or tap on a phone) ---------- */
+.usage-panel { outline: none; cursor: default; }
+.usage-body { max-height: 0; opacity: 0; overflow: hidden; transition: max-height .35s ease, opacity .25s ease; }
+.usage-panel:hover .usage-body, .usage-panel:focus-within .usage-body, .usage-panel.open .usage-body { max-height: 420px; opacity: 1; overflow: visible; }
+.usage-panel:hover .usage-hint, .usage-panel:focus-within .usage-hint, .usage-panel.open .usage-hint { visibility: hidden; }

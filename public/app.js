@@ -826,6 +826,10 @@
     if (p.has("google")) { const msg = p.get("google"); history.replaceState(null, "", "/"); setTimeout(() => toast(msg, 7000), 600); }
   })();
 
+  // Usage stays hidden until hovered; on phones, tap the Usage heading to show or hide it.
+  $("#usagePanel .label").addEventListener("click", () => $("#usagePanel").classList.toggle("open"));
+  if (matchMedia("(hover: none)").matches) $("#usagePanel .usage-hint").textContent = "this month · tap to show";
+
   /* ---------------- voice (works through Bluetooth glasses) ---------------- */
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
   const voice = { active: false, rec: null, turn: false, audio: null, convo: false };

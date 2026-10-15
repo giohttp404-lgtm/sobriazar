@@ -48,8 +48,9 @@
       <div class="eyebrow">Command center</div>
     </div>
 
-    <section class="panel">
-      <h2 class="label">Usage <span>this month</span></h2>
+    <section class="panel usage-panel" id="usagePanel" tabindex="0" aria-label="Usage this month (hover or tap to show)">
+      <h2 class="label">Usage <span class="usage-hint">this month · hover to show</span></h2>
+      <div class="usage-body">
       <div class="meter-card">
         <div class="meter-top">
           <span class="dot c">C</span>
@@ -72,6 +73,7 @@
       <div class="stat-row" id="mRow" hidden>
         <span class="dot m">M</span>
         <span><b id="mMonth">0</b> this month</span>
+      </div>
       </div>
     </section>
 
