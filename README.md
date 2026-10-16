@@ -24,3 +24,7 @@ Tap the mic (or your glasses) and say something like "find the email from Maria"
 4. On "send it" it says "Sending in 5 seconds, say cancel to stop". Saying "cancel", tapping the mic, or tapping Stop cancels it.
 
 Emails always send from one account, set under **Accounts → Send emails from** (giohttp404@gmail.com by default). Nothing is ever sent without your "send it". On screen, every prepared email has **Send** and **Don't send** buttons with the same 5-second countdown.
+
+## Web helper — step 1: Research
+
+Ask things like "find the cheapest hotel near Albuquerque next weekend", "what are the hours for the MVD on Montgomery", or paste a link and say "summarize this page". Auto sends these to **Research**: G searches Google, opens the actual pages to check prices and details, and answers with a short comparison and sources. It's free on your Gemini key. If G is out of free requests for the day, C does the research instead (a few cents). Works by voice too.
