@@ -779,7 +779,7 @@ async function searchWeb(q) {
         let u = decodeHtml(a[1]);
         const enc = u.match(/[?&]u=a1([^&]+)/);
         if (enc) try { u = atob(enc[1].replace(/-/g, "+").replace(/_/g, "/")); } catch {}
-        if (/^https?:\/\//.test(u) && !/bing\.com\//.test(u)) out.push({ url: u, title: stripTags(a[2]), snippet: stripTags(sn?.[1]) });
+        if (/^https?:\/\//.test(u) && !/bing\.com\/|msockid=|aclk|doubleclick/.test(u)) out.push({ url: u, title: stripTags(a[2]), snippet: stripTags(sn?.[1]) });
       }
       return out;
     },
@@ -803,6 +803,7 @@ async function searchWeb(q) {
     },
   ];
   // DuckDuckGo and Bing together (more good results to choose from); the others only if both come back empty.
+  // (If a free Tavily key is set, freeResearch uses Tavily instead; this is the no-key backup.)
   const [ddg, bing] = await Promise.all(engines.slice(0, 2).map((e) => e().catch(() => [])));
   const both = [];
   for (let i = 0; i < 10; i++) { if (ddg[i]) both.push(ddg[i]); if (bing[i]) both.push(bing[i]); }
@@ -833,6 +834,24 @@ async function readPage(url) {
   return { url: r.url || url, title: title || new URL(url).hostname, text: text.slice(0, 7000) };
 }
 
+// Tavily: a search service built for assistants. Its free plan (1,000 searches a month, no card) returns
+// clean results with the page text already pulled out, so nothing has to be scraped.
+async function tavilySearch(env, queries) {
+  const out = [];
+  await Promise.all(queries.slice(0, 2).map(async (q) => {
+    const r = await timedFetch("https://api.tavily.com/search", {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: `Bearer ${env.TAVILY_API_KEY}` },
+      body: JSON.stringify({ query: q, search_depth: "basic", max_results: 6, include_raw_content: "text", include_answer: false }),
+    }, 12000);
+    if (!r.ok) throw new Error(`Tavily ${r.status}`);
+    const j = await r.json();
+    for (const x of j.results || []) out.push({ url: x.url, title: x.title || x.url, snippet: x.content || "", text: (x.raw_content || x.content || "").slice(0, 7000), score: x.score || 0 });
+  }));
+  const seen = new Set();
+  return out.sort((a, b) => b.score - a.score).filter((x) => !seen.has(x.url) && seen.add(x.url));
+}
+
 async function freeResearch(env, history, turn, system) {
   const text = turn.text || "";
   const pasted = [...text.matchAll(/https?:\/\/[^\s<>"')]+/g)].map((m) => m[0]).slice(0, 3);
@@ -849,6 +868,16 @@ async function freeResearch(env, history, turn, system) {
     if (r.ok) try { const qs = JSON.parse(j.candidates?.[0]?.content?.parts?.[0]?.text || "[]").filter((x) => typeof x === "string" && x.trim()).slice(0, 3); if (qs.length) queries = qs; } catch {}
   }
   // 2. Search (DuckDuckGo / Mojeek) and read the best pages ourselves.
+  if (env.TAVILY_API_KEY && queries.length) {
+    try {
+      const found = await tavilySearch(env, queries);
+      if (found.length) {
+        const pastedPages = (await Promise.allSettled(pasted.map(readPage))).filter((p) => p.status === "fulfilled").map((p) => p.value);
+        const pagesT = [...pastedPages, ...found.filter((x) => x.text.length > 150).slice(0, 5)];
+        return await writeAnswer(env, history, text, system, pagesT, found.filter((x) => !pagesT.includes(x)).slice(0, 4), "Tavily");
+      }
+    } catch (e) { console.error("tavily failed:", e.message); }
+  }
   const STOP = new Set("the a an and or of for to in on at near what whats is are was how much many does do with from by this that my me i you it be can find look up price prices cheapest best hours".split(" "));
   const norm = (t) => String(t || "").toLowerCase().replace(/['’]/g, "");
   const terms = [...new Set(norm(queries.join(" ") + " " + raw).match(/[a-z0-9]{3,}/g) || [])].filter((w) => !STOP.has(w));
@@ -867,22 +896,26 @@ async function freeResearch(env, history, turn, system) {
   const pages = (await Promise.allSettled(toRead.map(readPage))).map((p, i) => (p.status === "fulfilled" ? p.value : { url: toRead[i], failed: p.reason?.message }));
   const good = pages.filter((p) => !p.failed);
   if (!good.length && !results.length) throw new Error("free search found nothing");
-  // 3. Plain G writes the answer from what we found.
+  return writeAnswer(env, history, text, system, good, results.slice(0, 8).filter((x) => !good.some((p) => p.url === x.url)), "web", pages.filter((p) => p.failed && pasted.includes(p.url)));
+}
+
+// Plain G (free) writes the answer from the pages we found, citing them like [1].
+async function writeAnswer(env, history, text, system, good, extra, via, failedPasted = []) {
   const sourcesText = [
     ...good.map((p, i) => `[${i + 1}] ${p.title} (${p.url})\n${p.text}`),
-    ...results.slice(0, 8).filter((x) => !good.some((p) => p.url === x.url)).map((x) => `- search result: ${x.title} (${x.url}): ${x.snippet}`),
-    ...pages.filter((p) => p.failed && pasted.includes(p.url)).map((p) => `- The link the user pasted (${p.url}) could not be opened: ${p.failed}`),
+    ...extra.map((x) => `- search result: ${x.title} (${x.url}): ${x.snippet}`),
+    ...failedPasted.map((p) => `- The link the user pasted (${p.url}) could not be opened: ${p.failed}`),
   ].join("\n\n");
   const contents = historyFor(history, "gemini").map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.text }] }));
-  contents.push({ role: "user", parts: [{ text: `${text}\n\n--- What I found on the web just now (use only this for facts that can change; cite like [1]) ---\n${sourcesText}` }] });
+  contents.push({ role: "user", parts: [{ text: `${text}\n\n--- What I found on the web just now (use only this for facts that can change; cite like [1]) ---\n${sourcesText || "(nothing useful was found)"}` }] });
   const { r, j } = await geminiGenerate(env, { systemInstruction: { parts: [{ text: system }] }, contents });
   if (!r.ok) throw geminiError(r, j);
   let answer = (j.candidates?.[0]?.content?.parts || []).filter((p) => !p.thought).map((p) => p.text || "").join("").trim();
   if (!answer) throw new Error("G didn't return an answer.");
   answer = answer.replace(/\s*\[(\d+)\]/g, (m, n) => (good[n - 1] ? ` [[${n}]](${good[n - 1].url})` : ""));
-  const src = good.length ? good : results.slice(0, 4).map((x) => ({ url: x.url, title: x.title }));
+  const src = good.length ? good : extra.slice(0, 4);
   if (src.length) answer += "\n\n**Sources:** " + src.slice(0, 6).map((p) => `[${String(p.title || p.url).replace(/[\[\]]/g, "").slice(0, 70)}](${p.url})`).join(" · ");
-  return { text: answer, used: [`Research · free (${good.length} page${good.length === 1 ? "" : "s"} read)`] };
+  return { text: answer, used: [`Research · free (${via}, ${good.length} page${good.length === 1 ? "" : "s"} read)`] };
 }
 
 async function researchWithGemini(env, history, turn, system) {

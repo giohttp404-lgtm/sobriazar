@@ -28,3 +28,5 @@ Emails always send from one account, set under **Accounts → Send emails from**
 ## Web helper — step 1: Research
 
 Ask things like "find the cheapest hotel near Albuquerque next weekend", "what are the hours for the MVD on Montgomery", or paste a link and say "summarize this page". Auto sends these to **Research**: Sobriazar searches the web itself (DuckDuckGo, then Mojeek, no key needed), opens the best pages, and has G write the answer with sources. That's free on your Gemini key. If free search finds nothing or G is busy, C does the research instead (a few cents) and the note above the answer says so. Works by voice too.
+
+**Free search key (recommended):** create a free account at tavily.com (1,000 searches a month, no credit card, so it can never bill you), copy the API key, and add it in Cloudflare → sobriazar → Settings → Variables and Secrets as a **Secret** named `TAVILY_API_KEY`. With it, research is free and much more reliable. Without it, Sobriazar scrapes DuckDuckGo and Bing, which often returns weak results from Cloudflare's servers.
