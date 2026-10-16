@@ -687,8 +687,9 @@ async function geminiGenerate(env, body) {
     });
     await recordGemini(env);
     const j = await r.json().catch(() => ({}));
-    last = { r, j, model };
-    if (r.ok || !(r.status === 429 || r.status >= 500)) return last;
+    last = { r, j, model, attempts: [...(last?.attempts || []), `${model.replace(/^gemini-/, "")}:${r.status}`] };
+    const retired = /no longer available|not found|is not supported for generateContent/i.test(j.error?.message || "");
+    if (r.ok || !(r.status === 429 || r.status >= 500 || (retired && model !== main))) return last;
     if (!backups) { backups = true; queue.push(...(await geminiBackups(env, tried))); }
   }
   return last;
@@ -722,7 +723,7 @@ async function callResearch(env, history, turn, opts) {
   } catch (err) {
     if (!env.ANTHROPIC_API_KEY) throw err;
     console.error("research G failed:", err.message);
-    return researchWithClaude(env, history, turn, system, err.busy ? "Research · C (G was busy)" : `Research · C (G: ${String(err.message).slice(0, 80)})`);
+    return researchWithClaude(env, history, turn, system, err.busy ? "Research · C (G was busy)" : `Research · C (G: ${String(err.message).slice(0, 160)})`);
   }
 }
 
@@ -730,9 +731,10 @@ async function researchWithGemini(env, history, turn, system) {
   const contents = historyFor(history, "gemini").map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.text }] }));
   contents.push({ role: "user", parts: [{ text: turn.text }] });
   const go = (tools) => geminiGenerate(env, { systemInstruction: { parts: [{ text: system }] }, contents, tools });
-  let { r, j } = await go([{ google_search: {} }, { url_context: {} }]);
-  if (r.status === 400 && /url_context|tool/i.test(j.error?.message || "")) ({ r, j } = await go([{ google_search: {} }]));
-  if (!r.ok) throw geminiError(r, j);
+  let res = await go([{ google_search: {} }, { url_context: {} }]);
+  if (res.r.status === 400 && /url_context|tool/i.test(res.j.error?.message || "")) res = await go([{ google_search: {} }]);
+  const { r, j } = res;
+  if (!r.ok) { const e = geminiError(r, j); e.message += ` [${(res.attempts || []).join(" ")}]`; throw e; }
   const cand = j.candidates?.[0] || {};
   let text = (cand.content?.parts || []).filter((p) => !p.thought).map((p) => p.text || "").join("").trim();
   if (!text) throw new Error("G didn't return an answer.");
