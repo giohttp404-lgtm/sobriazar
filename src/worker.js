@@ -652,6 +652,53 @@ function historyFor(history, engine) {
   return clean;
 }
 
+// Gemini with backups: when the main model is busy (5xx) or out of free requests (429), try Flash-Lite,
+// other Flash versions, then Pro. Each model has its own free capacity on Google's side.
+let geminiModels = null;
+async function geminiBackups(env, exclude) {
+  if (geminiModels === null) {
+    geminiModels = [];
+    try {
+      const r = await fetch("https://generativelanguage.googleapis.com/v1beta/models?pageSize=200", { headers: { "x-goog-api-key": env.GEMINI_API_KEY } });
+      if (r.ok) {
+        const ver = (n) => parseFloat((n.match(/gemini-(\d+(?:\.\d+)?)/) || [])[1] || 0);
+        const names = ((await r.json()).models || [])
+          .filter((m) => (m.supportedGenerationMethods || []).includes("generateContent"))
+          .map((m) => m.name.replace(/^models\//, ""))
+          .filter((n) => /^gemini-[\d.]+-(flash|flash-lite|pro)$/.test(n))
+          .sort((a, b) => ver(b) - ver(a));
+        const lite = names.filter((n) => n.endsWith("flash-lite")), flash = names.filter((n) => n.endsWith("-flash")), pro = names.filter((n) => n.endsWith("-pro"));
+        geminiModels = [lite[0], flash[0], flash[1], lite[1], pro[0]].filter(Boolean);
+      }
+    } catch {}
+  }
+  return geminiModels.filter((m) => !exclude.has(m));
+}
+async function geminiGenerate(env, body) {
+  const main = env.GEMINI_MODEL || "gemini-3.8-flash";
+  const tried = new Set();
+  let queue = [main], last = null, backups = false;
+  while (queue.length && tried.size < 5) {
+    const model = queue.shift();
+    if (tried.has(model)) continue;
+    tried.add(model);
+    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+      method: "POST", headers: { "content-type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY }, body: JSON.stringify(body),
+    });
+    await recordGemini(env);
+    const j = await r.json().catch(() => ({}));
+    last = { r, j, model };
+    if (r.ok || !(r.status === 429 || r.status >= 500)) return last;
+    if (!backups) { backups = true; queue.push(...(await geminiBackups(env, tried))); }
+  }
+  return last;
+}
+function geminiError(r, j) {
+  const e = new Error(r.status === 429 ? "G is out of free requests right now." : r.status >= 500 ? "Google's G servers are very busy right now." : j.error?.message || `G request failed (${r.status}).`);
+  e.busy = r.status === 429 || r.status >= 500;
+  return e;
+}
+
 // Step 1 of the web helper: research the web without a browser. G (free) searches Google and opens the actual
 // pages (url_context) to check prices, hours and details, then answers with sources. If G is out of free
 // requests or busy, C does it with its web search instead (costs a little).
@@ -674,30 +721,17 @@ async function callResearch(env, history, turn, opts) {
     return await researchWithGemini(env, history, turn, system);
   } catch (err) {
     if (!env.ANTHROPIC_API_KEY) throw err;
-    return researchWithClaude(env, history, turn, system, err.busy ? "Research · C (G is out of free requests today)" : "Research · C (G had a problem)");
+    return researchWithClaude(env, history, turn, system, err.busy ? "Research · C (G was busy)" : "Research · C (G had a problem)");
   }
 }
 
 async function researchWithGemini(env, history, turn, system) {
-  const model = env.GEMINI_MODEL || "gemini-3.8-flash";
   const contents = historyFor(history, "gemini").map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.text }] }));
   contents.push({ role: "user", parts: [{ text: turn.text }] });
-  const go = async (tools) => {
-    const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-      method: "POST",
-      headers: { "content-type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY },
-      body: JSON.stringify({ systemInstruction: { parts: [{ text: system }] }, contents, tools }),
-    });
-    await recordGemini(env);
-    return { r, j: await r.json().catch(() => ({})) };
-  };
+  const go = (tools) => geminiGenerate(env, { systemInstruction: { parts: [{ text: system }] }, contents, tools });
   let { r, j } = await go([{ google_search: {} }, { url_context: {} }]);
   if (r.status === 400 && /url_context|tool/i.test(j.error?.message || "")) ({ r, j } = await go([{ google_search: {} }]));
-  if (!r.ok) {
-    const e = new Error(r.status === 429 ? "G is out of free requests today." : j.error?.message || `G request failed (${r.status}).`);
-    e.busy = r.status === 429 || r.status >= 500;
-    throw e;
-  }
+  if (!r.ok) throw geminiError(r, j);
   const cand = j.candidates?.[0] || {};
   let text = (cand.content?.parts || []).filter((p) => !p.thought).map((p) => p.text || "").join("").trim();
   if (!text) throw new Error("G didn't return an answer.");
@@ -752,15 +786,10 @@ async function callGemini(env, history, turn, label, opts = {}) {
   parts.push({ text: turn.text || "Please look at the attached file." });
   contents.push({ role: "user", parts });
 
-  const r = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
-    method: "POST",
-    headers: { "content-type": "application/json", "x-goog-api-key": env.GEMINI_API_KEY },
-    body: JSON.stringify({ systemInstruction: { parts: [{ text: STYLE }] }, contents, ...(opts.search ? { tools: [{ google_search: {} }] } : {}) }),
-  });
-  const j = await r.json().catch(() => ({}));
-  await recordGemini(env);
+  const { r, j } = await geminiGenerate(env, { systemInstruction: { parts: [{ text: STYLE }] }, contents, ...(opts.search ? { tools: [{ google_search: {} }] } : {}) });
   if (!r.ok) {
-    if (r.status === 429) throw new Error("G has hit today's free limit. It resets tomorrow — use C or Best for now.");
+    if (r.status === 429) throw new Error("G is out of free requests right now (every G model was tried). Use C or Best for now.");
+    if (r.status >= 500) throw new Error("Google's G servers are very busy right now (every G model was tried). Try again in a minute, or use C.");
     throw new Error(j.error?.message || `G request failed (${r.status}).`);
   }
   let text = (j.candidates?.[0]?.content?.parts || []).filter((p) => !p.thought).map((p) => p.text || "").join("").trim();
