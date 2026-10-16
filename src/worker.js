@@ -93,6 +93,7 @@ async function route(request, env, url) {
 
 async function routeApp(request, env, url, path, method) {
   if (path === "/api/state" && method === "GET") return state(env);
+  if (path === "/api/diag/search" && method === "GET") return json(await diagSearch(env, url.searchParams.get("q") || "albuquerque library hours"));
   if (path === "/api/ask" && method === "POST") return ask(request, env);
   if (path === "/api/settings" && method === "PUT") return saveSettings(request, env);
   if (path === "/api/skills/use" && method === "POST") return useSkill(request, env);
@@ -903,4 +904,19 @@ function json(data, status = 200, headers = {}) {
     status,
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...headers },
   });
+}
+
+// Temporary check: which free ways of searching work from Cloudflare.
+async function diagSearch(env, q) {
+  const out = {};
+  const t = async (name, fn) => { const t0 = Date.now(); try { out[name] = await fn(); } catch (e) { out[name] = "ERR " + e.message; } out[name + "_ms"] = Date.now() - t0; };
+  const UA = { "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36", "accept-language": "en-US,en;q=0.9" };
+  await t("ddg_html", async () => { const r = await fetch("https://html.duckduckgo.com/html/?q=" + encodeURIComponent(q), { headers: UA }); const h = await r.text(); return [r.status, (h.match(/class="result__a"/g) || []).length, h.slice(0, 120)]; });
+  await t("ddg_lite", async () => { const r = await fetch("https://lite.duckduckgo.com/lite/?q=" + encodeURIComponent(q), { headers: UA }); const h = await r.text(); return [r.status, (h.match(/result-link/g) || []).length, h.slice(0, 120)]; });
+  await t("bing", async () => { const r = await fetch("https://www.bing.com/search?q=" + encodeURIComponent(q), { headers: UA }); const h = await r.text(); return [r.status, (h.match(/class="b_algo"/g) || []).length]; });
+  await t("mojeek", async () => { const r = await fetch("https://www.mojeek.com/search?q=" + encodeURIComponent(q), { headers: UA }); const h = await r.text(); return [r.status, (h.match(/class="title"/g) || []).length]; });
+  await t("wiki", async () => { const r = await fetch("https://en.wikipedia.org/w/api.php?action=opensearch&format=json&limit=3&search=" + encodeURIComponent(q), { headers: { "user-agent": "Sobriazar/1.0" } }); return [r.status, (await r.text()).slice(0, 150)]; });
+  await t("gemini_urlctx", async () => { const { r, j, attempts } = await geminiGenerate(env, { contents: [{ role: "user", parts: [{ text: "In one sentence, what is this page about? https://en.wikipedia.org/wiki/Sandia_Peak_Tramway" }] }], tools: [{ url_context: {} }] }); return [r.status, attempts, (j.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("").slice(0, 150) || j.error?.message?.slice(0, 150)]; });
+  await t("gemini_plain", async () => { const { r, attempts } = await geminiGenerate(env, { contents: [{ role: "user", parts: [{ text: "Say ok" }] }] }); return [r.status, attempts]; });
+  return out;
 }
