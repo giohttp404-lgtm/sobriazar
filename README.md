@@ -27,4 +27,4 @@ Emails always send from one account, set under **Accounts → Send emails from**
 
 ## Web helper — step 1: Research
 
-Ask things like "find the cheapest hotel near Albuquerque next weekend", "what are the hours for the MVD on Montgomery", or paste a link and say "summarize this page". Auto sends these to **Research**: G searches Google, opens the actual pages to check prices and details, and answers with a short comparison and sources. It's free on your Gemini key. If G is out of free requests for the day, C does the research instead (a few cents). Works by voice too.
+Ask things like "find the cheapest hotel near Albuquerque next weekend", "what are the hours for the MVD on Montgomery", or paste a link and say "summarize this page". Auto sends these to **Research**: Sobriazar searches the web itself (DuckDuckGo, then Mojeek, no key needed), opens the best pages, and has G write the answer with sources. That's free on your Gemini key. If free search finds nothing or G is busy, C does the research instead (a few cents) and the note above the answer says so. Works by voice too.

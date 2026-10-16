@@ -723,12 +723,122 @@ async function callResearch(env, history, turn, opts) {
   const system = RESEARCH_RULES(nowStr, opts.tz, opts.voice);
   if (!env.GEMINI_API_KEY || opts.priv) return researchWithClaude(env, history, turn, system, "Research · C");
   try {
-    return await researchWithGemini(env, history, turn, system);
+    return await freeResearch(env, history, turn, system);
   } catch (err) {
+    // Google's own search tool for G isn't free on this key right now, so the next stop is C.
     if (!env.ANTHROPIC_API_KEY) throw err;
     console.error("research G failed:", err.message);
-    return researchWithClaude(env, history, turn, system, err.busy ? "Research · C (G was busy)" : `Research · C (G: ${String(err.message).slice(0, 160)})`);
+    return researchWithClaude(env, history, turn, system, err.busy ? "Research · C (G was busy)" : `Research · C (free search: ${String(err.message).slice(0, 120)})`);
   }
+}
+
+// Free research: our own search (DuckDuckGo, then Mojeek: no key needed), our own page reading, and plain G
+// (no paid Google Search tool) to write the answer. Used first because it costs nothing.
+const BROWSER_HEADERS = { "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36", "accept-language": "en-US,en;q=0.9", accept: "text/html,application/xhtml+xml" };
+const decodeHtml = (t) => t.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#x27;|&#39;/g, "'").replace(/&#(\d+);/g, (m, n) => String.fromCharCode(+n));
+const stripTags = (h) => decodeHtml(String(h || "").replace(/<[^>]+>/g, "")).replace(/\s+/g, " ").trim();
+async function timedFetch(url, opts = {}, ms = 7000) {
+  const ctrl = new AbortController(); const tm = setTimeout(() => ctrl.abort(), ms);
+  try { return await fetch(url, { ...opts, signal: ctrl.signal, redirect: "follow" }); } finally { clearTimeout(tm); }
+}
+async function searchWeb(q) {
+  const engines = [
+    async () => {
+      const h = await (await timedFetch("https://html.duckduckgo.com/html/?q=" + encodeURIComponent(q), { headers: BROWSER_HEADERS })).text();
+      const out = [];
+      for (const m of h.matchAll(/<a[^>]+class="result__a"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?(?:class="result__snippet"[^>]*>([\s\S]*?)<\/a>)?/g)) {
+        let u = decodeHtml(m[1]); const ud = u.match(/[?&]uddg=([^&]+)/); if (ud) u = decodeURIComponent(ud[1]);
+        if (u.startsWith("//")) u = "https:" + u;
+        if (/^https?:\/\//.test(u) && !/duckduckgo\.com\/y\.js|ad_domain/.test(u)) out.push({ url: u, title: stripTags(m[2]), snippet: stripTags(m[3]) });
+      }
+      return out;
+    },
+    async () => {
+      const h = await (await timedFetch("https://lite.duckduckgo.com/lite/?q=" + encodeURIComponent(q), { headers: BROWSER_HEADERS })).text();
+      const out = [];
+      const snips = [...h.matchAll(/class=['"]result-snippet['"][^>]*>([\s\S]*?)<\/td>/g)].map((m) => stripTags(m[1]));
+      let i = 0;
+      for (const m of h.matchAll(/<a[^>]+href=["']([^"']+)["'][^>]*class=['"]result-link['"][^>]*>([\s\S]*?)<\/a>/g)) {
+        let u = decodeHtml(m[1]); const ud = u.match(/[?&]uddg=([^&]+)/); if (ud) u = decodeURIComponent(ud[1]);
+        if (/^https?:\/\//.test(u)) out.push({ url: u, title: stripTags(m[2]), snippet: snips[i] || "" });
+        i++;
+      }
+      return out;
+    },
+    async () => {
+      const h = await (await timedFetch("https://www.mojeek.com/search?q=" + encodeURIComponent(q), { headers: BROWSER_HEADERS })).text();
+      const out = [];
+      for (const m of h.matchAll(/<a[^>]+class="title"[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?<p class="s">([\s\S]*?)<\/p>/g)) out.push({ url: decodeHtml(m[1]), title: stripTags(m[2]), snippet: stripTags(m[3]) });
+      return out;
+    },
+  ];
+  for (const e of engines) {
+    try { const r = await e(); if (r.length) return r.slice(0, 8); } catch {}
+  }
+  return [];
+}
+function pageText(html) {
+  const title = stripTags((html.match(/<title[^>]*>([\s\S]*?)<\/title>/i) || [])[1] || "");
+  const body = html
+    .replace(/<(script|style|noscript|svg|nav|footer|header|form|iframe|template)[\s\S]*?<\/\1>/gi, " ")
+    .replace(/<!--[\s\S]*?-->/g, " ")
+    .replace(/<(br|\/p|\/div|\/li|\/tr|\/h[1-6])[^>]*>/gi, "\n")
+    .replace(/<[^>]+>/g, " ");
+  const text = decodeHtml(body).split("\n").map((l) => l.replace(/\s+/g, " ").trim()).filter((l) => l.length > 1).join("\n");
+  return { title, text };
+}
+async function readPage(url) {
+  const r = await timedFetch(url, { headers: BROWSER_HEADERS }, 8000);
+  if (!r.ok) throw new Error(String(r.status));
+  const type = r.headers.get("content-type") || "";
+  if (!/html|text\/plain/.test(type)) throw new Error("not a web page");
+  const html = (await r.text()).slice(0, 600000);
+  const { title, text } = /html/.test(type) ? pageText(html) : { title: url, text: html };
+  if (text.length < 200) throw new Error("almost no text (the site may need a real browser)");
+  return { url: r.url || url, title: title || new URL(url).hostname, text: text.slice(0, 7000) };
+}
+
+async function freeResearch(env, history, turn, system) {
+  const text = turn.text || "";
+  const pasted = [...text.matchAll(/https?:\/\/[^\s<>"')]+/g)].map((m) => m[0]).slice(0, 3);
+  // 1. Plain G (free) turns the request into search queries.
+  let queries = [];
+  if (!pasted.length || text.replace(/https?:\/\/\S+/g, "").trim().split(/\s+/).length > 6) {
+    const recent = historyFor(history, "gemini").slice(-4).map((m) => `${m.role}: ${m.text.slice(0, 400)}`).join("\n");
+    const { r, j } = await geminiGenerate(env, {
+      contents: [{ role: "user", parts: [{ text: `${system.split("\n").find((l) => l.startsWith("You are doing web research")) || ""}\nRecent conversation:\n${recent}\n\nRequest: ${text}\n\nWrite 1 to 3 short web search queries that would find the answer (include the city, dates and year if relevant).` }] }],
+      generationConfig: { responseMimeType: "application/json", responseSchema: { type: "ARRAY", items: { type: "STRING" } }, maxOutputTokens: 200 },
+    });
+    if (!r.ok) throw geminiError(r, j);
+    try { queries = JSON.parse(j.candidates?.[0]?.content?.parts?.[0]?.text || "[]").filter((x) => typeof x === "string").slice(0, 3); } catch {}
+    if (!queries.length) queries = [text.slice(0, 200)];
+  }
+  // 2. Search (DuckDuckGo / Mojeek) and read the best pages ourselves.
+  const results = [], seen = new Set();
+  for (const list of await Promise.all(queries.map(searchWeb))) for (const x of list) {
+    const key = x.url.replace(/[#?].*$/, "");
+    if (!seen.has(key)) { seen.add(key); results.push(x); }
+  }
+  const toRead = [...pasted, ...results.slice(0, 5).map((x) => x.url)].slice(0, 6);
+  const pages = (await Promise.allSettled(toRead.map(readPage))).map((p, i) => (p.status === "fulfilled" ? p.value : { url: toRead[i], failed: p.reason?.message }));
+  const good = pages.filter((p) => !p.failed);
+  if (!good.length && !results.length) throw new Error("free search found nothing");
+  // 3. Plain G writes the answer from what we found.
+  const sourcesText = [
+    ...good.map((p, i) => `[${i + 1}] ${p.title} (${p.url})\n${p.text}`),
+    ...results.slice(0, 8).filter((x) => !good.some((p) => p.url === x.url)).map((x) => `- search result: ${x.title} (${x.url}): ${x.snippet}`),
+    ...pages.filter((p) => p.failed && pasted.includes(p.url)).map((p) => `- The link the user pasted (${p.url}) could not be opened: ${p.failed}`),
+  ].join("\n\n");
+  const contents = historyFor(history, "gemini").map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.text }] }));
+  contents.push({ role: "user", parts: [{ text: `${text}\n\n--- What I found on the web just now (use only this for facts that can change; cite like [1]) ---\n${sourcesText}` }] });
+  const { r, j } = await geminiGenerate(env, { systemInstruction: { parts: [{ text: system }] }, contents });
+  if (!r.ok) throw geminiError(r, j);
+  let answer = (j.candidates?.[0]?.content?.parts || []).filter((p) => !p.thought).map((p) => p.text || "").join("").trim();
+  if (!answer) throw new Error("G didn't return an answer.");
+  answer = answer.replace(/\s*\[(\d+)\]/g, (m, n) => (good[n - 1] ? ` [[${n}]](${good[n - 1].url})` : ""));
+  const src = good.length ? good : results.slice(0, 4).map((x) => ({ url: x.url, title: x.title }));
+  if (src.length) answer += "\n\n**Sources:** " + src.slice(0, 6).map((p) => `[${String(p.title || p.url).replace(/[\[\]]/g, "").slice(0, 70)}](${p.url})`).join(" · ");
+  return { text: answer, used: [`Research · free (${good.length} page${good.length === 1 ? "" : "s"} read)`] };
 }
 
 async function researchWithGemini(env, history, turn, system) {
