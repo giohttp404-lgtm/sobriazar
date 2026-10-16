@@ -487,6 +487,9 @@ async function autoRoute(env, { text, files, history, priv, hasAccounts, forceAc
   const lastUsedAccounts = Boolean(lastAnswer?.files?.some?.((f) => f.used));
   const student = priv || STUDENT_WORDS.test(t);
 
+  // 0. Looking things up on the web wins unless the request is clearly about the user's own calendar, email or files.
+  const personal = /\b(calendar|schedule|meeting|appointment|my day|my week|brief|email|emails|inbox|gmail|unread|draft|drive|my (docs?|files?|folder|library|tasks)|to-?dos?)\b/i.test(t);
+  if (!files.length && !personal && !student && isResearch(t)) return pick("gemini", "Research", { search: true, research: true });
   // 1. Personal accounts (calendar, email, Drive, tasks) always go to C.
   const strongAccount = /\b(calendar|schedule|agenda|meeting|appointment|my day|my week|brief|email|emails|inbox|gmail|unread|draft|drive|doc|docs|file|files|folder|library|my tasks|to-?dos?|free time|available)\b/i.test(t);
   const accountish = forceAccounts || (wantsAccounts(t) && (strongAccount || !CURRENT_WORDS.test(t)));
