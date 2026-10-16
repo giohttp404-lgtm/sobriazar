@@ -737,7 +737,7 @@ async function researchWithGemini(env, history, turn, system) {
   let res = await go([{ google_search: {} }, { url_context: {} }]);
   if (res.r.status === 400 && /url_context|tool/i.test(res.j.error?.message || "")) res = await go([{ google_search: {} }]);
   const { r, j } = res;
-  if (!r.ok) { const e = geminiError(r, j); e.message += ` [${(res.attempts || []).join(" ")}]`; throw e; }
+  if (!r.ok) { const e = geminiError(r, j); e.message = `[${(res.attempts || []).join(" ")}] ${e.message}`; throw e; }
   const cand = j.candidates?.[0] || {};
   let text = (cand.content?.parts || []).filter((p) => !p.thought).map((p) => p.text || "").join("").trim();
   if (!text) throw new Error("G didn't return an answer.");
