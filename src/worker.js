@@ -93,7 +93,6 @@ async function route(request, env, url) {
 
 async function routeApp(request, env, url, path, method) {
   if (path === "/api/state" && method === "GET") return state(env);
-  if (path === "/api/diag/search" && method === "GET") return json(await diagSearch(env, url.searchParams.get("q") || "albuquerque library hours"));
   if (path === "/api/ask" && method === "POST") return ask(request, env);
   if (path === "/api/settings" && method === "PUT") return saveSettings(request, env);
   if (path === "/api/skills/use" && method === "POST") return useSkill(request, env);
@@ -691,10 +690,22 @@ async function geminiGenerate(env, body) {
     });
     await recordGemini(env);
     const j = await r.json().catch(() => ({}));
-    last = { r, j, model, attempts: [...(last?.attempts || []), `${model.replace(/^gemini-/, "")}:${r.status}`] };
+    last = { r, j, model, retried: last?.retried, attempts: [...(last?.attempts || []), `${model.replace(/^gemini-/, "")}:${r.status}`] };
     const retired = /no longer available|not found|is not supported for generateContent/i.test(j.error?.message || "");
     if (r.ok || !(r.status === 429 || r.status >= 500 || (retired && model !== main))) return last;
     if (!backups) { backups = true; queue.push(...(await geminiBackups(env, tried))); }
+    if (!queue.length && !last.retried && last.attempts.some((a) => /:5\d\d$/.test(a))) {
+      // Every model was overloaded: wait a moment and give the two lightest models one more try.
+      await new Promise((ok) => setTimeout(ok, 2500));
+      const lite = (await geminiBackups(env, new Set())).filter((m) => /lite/.test(m)).slice(0, 2);
+      lite.forEach((m) => tried.delete(m)); queue.push(...lite); last.retried = true;
+    }
+  }
+  // Report the most useful failure (busy or out of requests), not a retired backup model.
+  const busy = last.attempts?.find((a) => /:(429|5\d\d)$/.test(a));
+  if (busy && !(last.r.status === 429 || last.r.status >= 500)) {
+    const status = +busy.split(":").pop();
+    return { ...last, r: { ok: false, status }, j: { error: { message: status === 429 ? "out of requests" : "busy" } } };
   }
   return last;
 }
@@ -732,7 +743,7 @@ async function callResearch(env, history, turn, opts) {
   }
 }
 
-// Free research: our own search (DuckDuckGo, then Mojeek: no key needed), our own page reading, and plain G
+// Free research: our own search (DuckDuckGo, then Bing, then Mojeek: no key needed), our own page reading, and plain G
 // (no paid Google Search tool) to write the answer. Used first because it costs nothing.
 const BROWSER_HEADERS = { "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36", "accept-language": "en-US,en;q=0.9", accept: "text/html,application/xhtml+xml" };
 const decodeHtml = (t) => t.replace(/&nbsp;/g, " ").replace(/&amp;/g, "&").replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&#x27;|&#39;/g, "'").replace(/&#(\d+);/g, (m, n) => String.fromCharCode(+n));
@@ -750,6 +761,17 @@ async function searchWeb(q) {
         let u = decodeHtml(m[1]); const ud = u.match(/[?&]uddg=([^&]+)/); if (ud) u = decodeURIComponent(ud[1]);
         if (u.startsWith("//")) u = "https:" + u;
         if (/^https?:\/\//.test(u) && !/duckduckgo\.com\/y\.js|ad_domain/.test(u)) out.push({ url: u, title: stripTags(m[2]), snippet: stripTags(m[3]) });
+      }
+      return out;
+    },
+    async () => {
+      const h = await (await timedFetch("https://www.bing.com/search?setlang=en-US&cc=US&q=" + encodeURIComponent(q), { headers: BROWSER_HEADERS })).text();
+      const out = [];
+      for (const m of h.matchAll(/<li class="b_algo"[\s\S]*?<h2[^>]*>\s*<a[^>]+href="([^"]+)"[^>]*>([\s\S]*?)<\/a>[\s\S]*?(?:<p[^>]*>([\s\S]*?)<\/p>)?/g)) {
+        let u = decodeHtml(m[1]);
+        const enc = u.match(/[?&]u=a1([^&]+)/);
+        if (enc) try { u = atob(enc[1].replace(/-/g, "+").replace(/_/g, "/")); } catch {}
+        if (/^https?:\/\//.test(u) && !/bing\.com\//.test(u)) out.push({ url: u, title: stripTags(m[2]), snippet: stripTags(m[3]) });
       }
       return out;
     },
@@ -801,18 +823,9 @@ async function readPage(url) {
 async function freeResearch(env, history, turn, system) {
   const text = turn.text || "";
   const pasted = [...text.matchAll(/https?:\/\/[^\s<>"')]+/g)].map((m) => m[0]).slice(0, 3);
-  // 1. Plain G (free) turns the request into search queries.
-  let queries = [];
-  if (!pasted.length || text.replace(/https?:\/\/\S+/g, "").trim().split(/\s+/).length > 6) {
-    const recent = historyFor(history, "gemini").slice(-4).map((m) => `${m.role}: ${m.text.slice(0, 400)}`).join("\n");
-    const { r, j } = await geminiGenerate(env, {
-      contents: [{ role: "user", parts: [{ text: `${system.split("\n").find((l) => l.startsWith("You are doing web research")) || ""}\nRecent conversation:\n${recent}\n\nRequest: ${text}\n\nWrite 1 to 3 short web search queries that would find the answer (include the city, dates and year if relevant).` }] }],
-      generationConfig: { responseMimeType: "application/json", responseSchema: { type: "ARRAY", items: { type: "STRING" } }, maxOutputTokens: 200 },
-    });
-    if (!r.ok) throw geminiError(r, j);
-    try { queries = JSON.parse(j.candidates?.[0]?.content?.parts?.[0]?.text || "[]").filter((x) => typeof x === "string").slice(0, 3); } catch {}
-    if (!queries.length) queries = [text.slice(0, 200)];
-  }
+  // 1. Search with the request itself (search engines handle plain questions well; this skips a G call).
+  const q = text.replace(/https?:\/\/\S+/g, " ").replace(/^(please\s+)?(can you\s+|could you\s+)?(find( me)?|look ?up|search( for)?|research|tell me)\s+/i, "").replace(/\s+/g, " ").trim().slice(0, 200);
+  const queries = q.split(/\s+/).length >= 2 ? [q] : [];
   // 2. Search (DuckDuckGo / Mojeek) and read the best pages ourselves.
   const results = [], seen = new Set();
   for (const list of await Promise.all(queries.map(searchWeb))) for (const x of list) {
@@ -1014,19 +1027,4 @@ function json(data, status = 200, headers = {}) {
     status,
     headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", ...headers },
   });
-}
-
-// Temporary check: which free ways of searching work from Cloudflare.
-async function diagSearch(env, q) {
-  const out = {};
-  const t = async (name, fn) => { const t0 = Date.now(); try { out[name] = await fn(); } catch (e) { out[name] = "ERR " + e.message; } out[name + "_ms"] = Date.now() - t0; };
-  const UA = { "user-agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/141.0 Safari/537.36", "accept-language": "en-US,en;q=0.9" };
-  await t("ddg_html", async () => { const r = await fetch("https://html.duckduckgo.com/html/?q=" + encodeURIComponent(q), { headers: UA }); const h = await r.text(); return [r.status, (h.match(/class="result__a"/g) || []).length, h.slice(0, 120)]; });
-  await t("ddg_lite", async () => { const r = await fetch("https://lite.duckduckgo.com/lite/?q=" + encodeURIComponent(q), { headers: UA }); const h = await r.text(); return [r.status, (h.match(/result-link/g) || []).length, h.slice(0, 120)]; });
-  await t("bing", async () => { const r = await fetch("https://www.bing.com/search?q=" + encodeURIComponent(q), { headers: UA }); const h = await r.text(); return [r.status, (h.match(/class="b_algo"/g) || []).length]; });
-  await t("mojeek", async () => { const r = await fetch("https://www.mojeek.com/search?q=" + encodeURIComponent(q), { headers: UA }); const h = await r.text(); return [r.status, (h.match(/class="title"/g) || []).length]; });
-  await t("wiki", async () => { const r = await fetch("https://en.wikipedia.org/w/api.php?action=opensearch&format=json&limit=3&search=" + encodeURIComponent(q), { headers: { "user-agent": "Sobriazar/1.0" } }); return [r.status, (await r.text()).slice(0, 150)]; });
-  await t("gemini_urlctx", async () => { const { r, j, attempts } = await geminiGenerate(env, { contents: [{ role: "user", parts: [{ text: "In one sentence, what is this page about? https://en.wikipedia.org/wiki/Sandia_Peak_Tramway" }] }], tools: [{ url_context: {} }] }); return [r.status, attempts, (j.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("").slice(0, 150) || j.error?.message?.slice(0, 150)]; });
-  await t("gemini_plain", async () => { const { r, attempts } = await geminiGenerate(env, { contents: [{ role: "user", parts: [{ text: "Say ok" }] }] }); return [r.status, attempts]; });
-  return out;
 }
