@@ -908,10 +908,15 @@ async function writeAnswer(env, history, text, system, good, extra, via, failedP
   ].join("\n\n");
   const contents = historyFor(history, "gemini").map((m) => ({ role: m.role === "assistant" ? "model" : "user", parts: [{ text: m.text }] }));
   contents.push({ role: "user", parts: [{ text: `${text}\n\n--- What I found on the web just now (use only this for facts that can change; cite like [1]) ---\n${sourcesText || "(nothing useful was found)"}` }] });
-  const { r, j } = await geminiGenerate(env, { systemInstruction: { parts: [{ text: system }] }, contents });
-  if (!r.ok) throw geminiError(r, j);
-  let answer = (j.candidates?.[0]?.content?.parts || []).filter((p) => !p.thought).map((p) => p.text || "").join("").trim();
-  if (!answer) throw new Error("G didn't return an answer.");
+  let answer = "", why = "";
+  for (let attempt = 0; attempt < 2 && !answer; attempt++) {
+    // Sometimes G comes back empty (it ran out of room while thinking, or a hiccup); one more try usually works.
+    const { r, j } = await geminiGenerate(env, { systemInstruction: { parts: [{ text: system }] }, contents, generationConfig: { maxOutputTokens: 8192 } });
+    if (!r.ok) throw geminiError(r, j);
+    answer = (j.candidates?.[0]?.content?.parts || []).filter((p) => !p.thought).map((p) => p.text || "").join("").trim();
+    why = j.candidates?.[0]?.finishReason || j.promptFeedback?.blockReason || "";
+  }
+  if (!answer) throw new Error(`G didn't return an answer${why ? ` (${why})` : ""}.`);
   answer = answer.replace(/\s*\[(\d+)\]/g, (m, n) => (good[n - 1] ? ` [[${n}]](${good[n - 1].url})` : ""));
   const src = good.length ? good : extra.slice(0, 4);
   if (src.length) answer += "\n\n**Sources:** " + src.slice(0, 6).map((p) => `[${String(p.title || p.url).replace(/[\[\]]/g, "").slice(0, 70)}](${p.url})`).join(" · ");
