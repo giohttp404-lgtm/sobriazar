@@ -721,7 +721,8 @@ async function callResearch(env, history, turn, opts) {
     return await researchWithGemini(env, history, turn, system);
   } catch (err) {
     if (!env.ANTHROPIC_API_KEY) throw err;
-    return researchWithClaude(env, history, turn, system, err.busy ? "Research · C (G was busy)" : "Research · C (G had a problem)");
+    console.error("research G failed:", err.message);
+    return researchWithClaude(env, history, turn, system, err.busy ? "Research · C (G was busy)" : `Research · C (G: ${String(err.message).slice(0, 80)})`);
   }
 }
 
