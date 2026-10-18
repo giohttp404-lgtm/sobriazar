@@ -443,3 +443,19 @@ body.chatting .convo { display: block; flex: 1 1 auto; }
 .usage-body { max-height: 0; opacity: 0; overflow: hidden; transition: max-height .35s ease, opacity .25s ease; }
 .usage-panel:hover .usage-body, .usage-panel:focus-within .usage-body, .usage-panel.open .usage-body { max-height: 420px; opacity: 1; overflow: visible; }
 .usage-panel:hover .usage-hint, .usage-panel:focus-within .usage-hint, .usage-panel.open .usage-hint { visibility: hidden; }
+
+/* ---------- mini browser ---------- */
+.browse-live .bl-bar { display: flex; align-items: center; gap: 8px; background: var(--raise); border: 1px solid var(--line); border-radius: 8px 8px 0 0; padding: 6px 10px; font: 11.5px var(--mono); color: var(--dim); overflow: hidden; }
+.browse-live .bl-url { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-width: 0; }
+.browse-live .bl-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--ice); box-shadow: 0 0 8px var(--ice); flex: none; animation: pulse 1.2s ease-in-out infinite; }
+.browse-live.finished .bl-dot { animation: none; background: var(--best); box-shadow: none; }
+.browse-live .bl-screen { position: relative; border: 1px solid var(--line); border-top: 0; border-radius: 0 0 8px 8px; overflow: hidden; background: #fff; aspect-ratio: 1024 / 640; }
+.browse-live .bl-screen img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: top; }
+.browse-live .bl-wait { position: absolute; inset: 0; display: grid; place-items: center; background: var(--panel); color: var(--dim); font: 12px var(--mono); }
+.browse-live .bl-steps { margin: 10px 0 8px; padding-left: 20px; font-size: 13px; color: var(--dim); display: grid; gap: 3px; }
+.browse-live .bl-steps li:last-child { color: var(--fg); }
+.browse-live.finished .bl-steps li:last-child { color: var(--dim); }
+.browse-live .bl-state { font: 11px var(--mono); color: var(--faint); align-self: center; }
+.browse-thumb { display: block; position: relative; margin: 8px 0 10px; max-width: 360px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+.browse-thumb img { display: block; width: 100%; }
+.browse-thumb span { position: absolute; left: 6px; bottom: 6px; font: 10.5px var(--mono); background: rgba(0,0,0,.6); color: #fff; padding: 2px 6px; border-radius: 4px; }

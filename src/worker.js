@@ -2,6 +2,7 @@
 import { LOCK_SCHEMA, awakeCookie, clearAwake, isAwake, listPasskeys, registerOptions, registerVerify, loginOptions, loginVerify, deletePasskey } from "./lock.js";
 import { GOOGLE_SCHEMA, TOOLS, TOOL_LABELS, googleReady, startConnect, finishConnect, listAccounts, disconnect, pickerConfig, listLibrary, addToLibrary, removeFromLibrary, runTool, saveDoc, wantsAccounts, sendEmail, sendFromAccount } from "./google.js";
 // Keys live only here, as Cloudflare secrets. They never reach the browser.
+export { BrowseRun } from "./browse.js";
 
 const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS threads (id TEXT PRIMARY KEY, title TEXT NOT NULL, created INTEGER NOT NULL, updated INTEGER NOT NULL)`,
@@ -97,6 +98,19 @@ async function routeApp(request, env, url, path, method) {
   if (path === "/api/settings" && method === "PUT") return saveSettings(request, env);
   if (path === "/api/skills/use" && method === "POST") return useSkill(request, env);
   if (path === "/api/email/send" && method === "POST") return emailAction(request, env, "send");
+  {
+    const bm = path.match(/^\/api\/browse\/([a-f0-9]{16})(\/shot|\/stop)?$/);
+    if (bm && env.BROWSE) {
+      const stub = env.BROWSE.get(env.BROWSE.idFromName(bm[1]));
+      if (bm[2] === "/shot" && method === "GET") {
+        const b64 = await stub.shot();
+        if (!b64) return new Response(null, { status: 404 });
+        return new Response(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)), { headers: { "content-type": "image/jpeg", "cache-control": "private, max-age=31536000" } });
+      }
+      if (bm[2] === "/stop" && method === "POST") return json(await stub.stop());
+      if (!bm[2] && method === "GET") { const v = await stub.get(); return v ? json(v) : json({ error: "That browser run is gone." }, 404); }
+    }
+  }
   if (path === "/api/email/cancel" && method === "POST") return emailAction(request, env, "cancel");
   if (path === "/api/google/picker" && method === "GET") return json(await pickerConfig(env, String(url.searchParams.get("account") || "").toLowerCase()));
   if (path === "/api/library" && method === "POST") {
@@ -409,6 +423,14 @@ async function ask(request, env) {
   await env.DB.prepare("INSERT INTO messages (id, thread_id, role, engine, content, files, created) VALUES (?, ?, 'user', NULL, ?, ?, ?)")
     .bind(userMsg.id, threadId, rawText, JSON.stringify(fileNames), now).run();
 
+  // Step 2 of the web helper: "browse ..." / "go to ... and ..." / "use the browser ..." opens the mini browser.
+  if (env.BROWSE && env.BROWSER && !files.length && !priv && isBrowse(text) && !/\b(calendar|schedule|email|emails|inbox|gmail|drive|my docs?|my files?|my tasks|to-?dos?)\b/i.test(text)) {
+    const id = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
+    await env.BROWSE.get(env.BROWSE.idFromName(id)).start({ id, task: text, threadId, tz: validTz(body.tz), voice: Boolean(body.voice) });
+    await env.DB.prepare("UPDATE threads SET updated = ? WHERE id = ?").bind(Date.now(), threadId).run();
+    return json({ threadId, user: userMsg, replies: [], browse: { id }, mode: "browser", route: "Mini browser" });
+  }
+
   const turn = { text, files };
   const jobs = [];
   const accounts = googleReady(env) ? await listAccounts(env) : [];
@@ -477,6 +499,9 @@ const BIG_WORDS = /\b(plan (a|my|the) (unit|week|semester|year|trip|budget)|comp
 const FOLLOW_UP = /^(and|also|now|then|ok(ay)?|what about|move|add|change|make|send|save|put|do the same|same for|that|it|this|those)\b/i;
 const EMAIL_FOLLOW = /\b(read|all of it|whole (thing|email)|reply|respond|answer|write|tell|say|saying|send|let (him|her|them) know|change|shorter|longer|instead|add|remove|more|less|formal|casual|friendlier|yes|yeah|no|sure|okay|ok)\b/i;
 const RESEARCH_WORDS = /\b(find( me)?|look ?up|search (for|the web)|research|cheapest|lowest (price|rate)|best (deal|price|rate)|compare (prices|rates)|prices? (for|of|at)|how much (is|are|does|do)|reviews? (of|for)|open now|hours (for|of|at)|near (me|albuquerque|santa fe)|in stock|summari[sz]e this (page|link|site|article)|what does this (page|link|site|article) say|check (the|this) (website|site|page))\b/i;
+function isBrowse(t) {
+  return /^(please\s+)?(browse|go to|open|visit|navigate to)\b/i.test(t || "") || /\b(use|open|with|in) (the |your )?(mini[- ])?browser\b/i.test(t || "");
+}
 function isResearch(t) { return /https?:\/\/\S+/i.test(t || "") || RESEARCH_WORDS.test(t || ""); }
 const LABEL = { gemini: "G", claude: "C", best: "Best", muse: "M" };
 
@@ -677,7 +702,7 @@ async function geminiBackups(env, exclude) {
   }
   return geminiModels.filter((m) => !exclude.has(m));
 }
-async function geminiGenerate(env, body) {
+export async function geminiGenerate(env, body) {
   const main = env.GEMINI_MODEL || "gemini-3.8-flash";
   const tried = new Set();
   let queue = [main], last = null, backups = false;
@@ -754,7 +779,7 @@ async function timedFetch(url, opts = {}, ms = 7000) {
   const ctrl = new AbortController(); const tm = setTimeout(() => ctrl.abort(), ms);
   try { return await fetch(url, { ...opts, signal: ctrl.signal, redirect: "follow" }); } finally { clearTimeout(tm); }
 }
-async function searchWeb(q) {
+export async function searchWeb(q) {
   const engines = [
     async () => {
       const h = await (await timedFetch("https://html.duckduckgo.com/html/?q=" + encodeURIComponent(q), { headers: BROWSER_HEADERS })).text();
@@ -836,7 +861,7 @@ async function readPage(url) {
 
 // Tavily: a search service built for assistants. Its free plan (1,000 searches a month, no card) returns
 // clean results with the page text already pulled out, so nothing has to be scraped.
-async function tavilySearch(env, queries) {
+export async function tavilySearch(env, queries) {
   const out = [];
   await Promise.all(queries.slice(0, 2).map(async (q) => {
     const r = await timedFetch("https://api.tavily.com/search", {

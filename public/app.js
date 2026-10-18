@@ -83,7 +83,7 @@
     try { await api("/lock", { method: "POST", body: {} }); } catch {}
     showLock();
   }
-  setInterval(() => { if (!$("#app").hidden && !S.busy && !voice.active && Date.now() - lastActive > IDLE_MS) lockNow(); }, 15000);
+  setInterval(() => { if (!$("#app").hidden && !S.busy && !S.browsing && !voice.active && Date.now() - lastActive > IDLE_MS) lockNow(); }, 15000);
   document.addEventListener("visibilitychange", () => {
     if (!document.hidden && !$("#app").hidden && Date.now() - lastActive > IDLE_MS) lockNow();
   });
@@ -442,6 +442,11 @@
     const box = $("#convo"); box.innerHTML = "";
     document.body.classList.toggle("chatting", S.messages.length > 0 || S.busy);
     groupTurns(S.messages).forEach((t) => box.appendChild(turnEl(t.user, t.replies)));
+    // Keep the live mini-browser card on screen when the conversation re-draws.
+    if (S.liveBrowse && S.liveBrowse.threadId === S.currentId) {
+      const last = box.lastElementChild;
+      (last?.querySelector(".answers") || last || box).appendChild(S.liveBrowse.el);
+    }
     if (scrollEnd) requestAnimationFrame(() => (box.scrollTop = box.scrollHeight));
     galaxyMain.resize();
   }
@@ -477,6 +482,14 @@
       if (routeNote) { const sp = document.createElement("span"); sp.className = "route"; sp.textContent = routeNote.route; u.appendChild(sp); }
       [...new Set(usedList.map((f) => f.name))].forEach((n) => { const sp = document.createElement("span"); sp.textContent = "Used " + n; u.appendChild(sp); });
       el.insertBefore(u, body);
+    }
+    const br = (m.files || []).find((f) => f.browse);
+    if (br) {
+      const fig = document.createElement("a"); fig.className = "browse-thumb"; fig.href = `/api/browse/${br.browse}/shot`; fig.target = "_blank"; fig.rel = "noopener";
+      fig.innerHTML = `<img alt="Last screen in the mini browser" loading="lazy"><span>Last screen</span>`;
+      fig.querySelector("img").src = `/api/browse/${br.browse}/shot`;
+      fig.querySelector("img").onerror = () => fig.remove();
+      el.insertBefore(fig, body);
     }
     const mail = (m.files || []).find((f) => f.email);
     if (mail && m.id) el.appendChild(mailCard(m.id, mail.email));
@@ -540,7 +553,8 @@
       if (S.currentId !== res.threadId) { S.currentId = res.threadId; local.set("thread", res.threadId); }
       S.messages.push(res.user, ...res.replies);
       pending.replaceWith(turnEl(res.user, res.replies));
-      afterAnswer(res.replies);
+      if (res.browse) { const wasVoice = voice.turn; voice.turn = false; watchBrowse(res.browse.id, res.threadId, wasVoice); }
+      else afterAnswer(res.replies);
       sync();
     } catch (err) {
       pending.querySelector(".answers").innerHTML = "";
@@ -843,6 +857,55 @@
   // Usage stays hidden until hovered; on phones, tap the Usage heading to show or hide it.
   $("#usagePanel .label").addEventListener("click", () => $("#usagePanel").classList.toggle("open"));
   if (matchMedia("(hover: none)").matches) $("#usagePanel .usage-hint").textContent = "this month · tap to show";
+
+  /* ---------------- mini browser: live view while it works ---------------- */
+  function watchBrowse(id, threadId, spoken) {
+    S.browsing = true;
+    const turn = $("#convo").lastElementChild;
+    const card = document.createElement("article");
+    card.className = "answer browse-live";
+    card.innerHTML = `<div class="src"><span class="dot g">🌐</span>Mini browser</div>
+      <div class="bl-bar"><span class="bl-dot"></span><span class="bl-url">Starting a browser…</span></div>
+      <div class="bl-screen"><img alt="What the mini browser sees"><div class="bl-wait">Opening a browser in the cloud…</div></div>
+      <ol class="bl-steps"></ol>
+      <div class="actions"><button class="act" type="button">Stop</button><span class="bl-state">Working · it only looks, never submits anything</span></div>`;
+    (turn?.querySelector(".answers") || turn || $("#convo")).appendChild(card);
+    S.liveBrowse = { id, threadId, el: card };
+    const img = card.querySelector("img"), urlEl = card.querySelector(".bl-url"), steps = card.querySelector(".bl-steps"), stateEl = card.querySelector(".bl-state");
+    const stopBtn = card.querySelector(".actions .act");
+    let lastShot = 0, done = false, misses = 0;
+    if (spoken) speak("Okay, I'm opening the browser. I'll tell you what I find.", () => {});
+    stopBtn.onclick = async () => { stopBtn.disabled = true; stopBtn.textContent = "Stopping…"; try { await api(`/browse/${id}/stop`, { method: "POST" }); } catch (err) { toast(err.message); } };
+    const finish = async (v) => {
+      done = true; S.browsing = false; stopBtn.remove(); S.liveBrowse = null; card.remove();
+      stateEl.textContent = v.status === "done" ? "Done" : v.status === "stopped" ? "Stopped" : `Stopped: ${v.error || "something went wrong"}`;
+      card.classList.add("finished");
+      await sync();
+      if (S.currentId === threadId) await openThread(threadId, true);
+      if (spoken || $("#speakToggle").checked || $("#glassesToggle").checked) {
+        const last = [...S.messages].reverse().find((m) => m.role === "assistant");
+        if (last) speak(speakable(last.content));
+      }
+    };
+    const tick = async () => {
+      if (done) return;
+      let v;
+      try { v = await api(`/browse/${id}`, { bg: true }); misses = 0; }
+      catch (err) { if (err.locked || ++misses > 20) { S.browsing = false; return; } return setTimeout(tick, 2500); }
+      urlEl.textContent = v.url ? `${v.title ? v.title + " · " : ""}${v.url}` : "Searching for where to start…";
+      if (v.shotAt && v.shotAt !== lastShot) {
+        lastShot = v.shotAt;
+        img.src = `/api/browse/${id}/shot?t=${v.shotAt}`;
+        img.onload = () => card.querySelector(".bl-wait")?.remove();
+      }
+      const box = $("#convo"), near = box.scrollHeight - box.scrollTop - box.clientHeight < 160;
+      steps.innerHTML = v.steps.map((st) => `<li>${esc(st.note || "")}</li>`).join("");
+      if (near) box.scrollTop = box.scrollHeight;
+      if (v.status !== "running") return finish(v);
+      setTimeout(tick, 1500);
+    };
+    tick();
+  }
 
   /* ---------------- voice (works through Bluetooth glasses) ---------------- */
   const SR = window.SpeechRecognition || window.webkitSpeechRecognition;

@@ -3,6 +3,10 @@
   "name": "sobriazar",
   "main": "src/worker.js",
   "compatibility_date": "2026-09-01",
+  "compatibility_flags": ["nodejs_compat"],
+  "browser": { "binding": "BROWSER" },
+  "durable_objects": { "bindings": [{ "name": "BROWSE", "class_name": "BrowseRun" }] },
+  "migrations": [{ "tag": "v1", "new_sqlite_classes": ["BrowseRun"] }],
   "assets": {
     "directory": "./public",
     "binding": "ASSETS",
