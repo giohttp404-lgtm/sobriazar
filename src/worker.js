@@ -99,7 +99,7 @@ async function routeApp(request, env, url, path, method) {
   if (path === "/api/skills/use" && method === "POST") return useSkill(request, env);
   if (path === "/api/email/send" && method === "POST") return emailAction(request, env, "send");
   {
-    const bm = path.match(/^\/api\/browse\/([a-f0-9]{16})(\/shot|\/stop)?$/);
+    const bm = path.match(/^\/api\/browse\/([a-f0-9]{16})(\/shot|\/stop|\/input|\/resume)?$/);
     if (bm && env.BROWSE) {
       const stub = env.BROWSE.get(env.BROWSE.idFromName(bm[1]));
       if (bm[2] === "/shot" && method === "GET") {
@@ -108,6 +108,11 @@ async function routeApp(request, env, url, path, method) {
         return new Response(Uint8Array.from(atob(b64), (c) => c.charCodeAt(0)), { headers: { "content-type": "image/jpeg", "cache-control": "private, max-age=31536000" } });
       }
       if (bm[2] === "/stop" && method === "POST") return json(await stub.stop());
+      if (bm[2] === "/resume" && method === "POST") return json(await stub.resume());
+      if (bm[2] === "/input" && method === "POST") {
+        const b = await request.json();
+        return json(await stub.userInput({ kind: String(b.kind || ""), x: +b.x, y: +b.y, ms: +b.ms, dy: +b.dy, key: String(b.key || ""), text: String(b.text || "").slice(0, 500) }));
+      }
       if (!bm[2] && method === "GET") { const v = await stub.get(); return v ? json(v) : json({ error: "That browser run is gone." }, 404); }
     }
   }

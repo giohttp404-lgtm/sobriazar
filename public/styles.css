@@ -459,3 +459,19 @@ body.chatting .convo { display: block; flex: 1 1 auto; }
 .browse-thumb { display: block; position: relative; margin: 8px 0 10px; max-width: 360px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
 .browse-thumb img { display: block; width: 100%; }
 .browse-thumb span { position: absolute; left: 6px; bottom: 6px; font: 10.5px var(--mono); background: rgba(0,0,0,.6); color: #fff; padding: 2px 6px; border-radius: 4px; }
+
+.browse-live.yours .bl-screen { cursor: pointer; outline: 2px solid var(--ice); outline-offset: 2px; }
+.browse-live.busy .bl-screen { opacity: .75; }
+.browse-live .bl-turn { display: grid; gap: 2px; background: rgba(111, 220, 255, .1); border: 1px solid rgba(111, 220, 255, .45); border-radius: 8px; padding: 8px 10px; font-size: 13.5px; }
+.browse-live .bl-turn[hidden] { display: none; }
+.browse-live .bl-turn b { color: var(--ice); font: 600 11px var(--mono); letter-spacing: .14em; text-transform: uppercase; }
+.browse-live .bl-tap { position: absolute; width: 22px; height: 22px; margin: -11px 0 0 -11px; border-radius: 50%; border: 2px solid var(--ember); box-shadow: 0 0 0 4px rgba(255, 74, 60, .25); pointer-events: none; }
+.browse-live .bl-tap[hidden] { display: none; }
+.browse-live .bl-remote { display: grid; gap: 6px; }
+.browse-live .bl-remote[hidden] { display: none; }
+.browse-live .bl-typeform { display: flex; gap: 6px; }
+.browse-live .bl-type { flex: 1; min-width: 0; background: var(--panel); color: var(--fg); border: 1px solid var(--line-hi); border-radius: 6px; padding: 8px 10px; font: 14px var(--sans); }
+.browse-live .bl-keys { display: flex; gap: 6px; flex-wrap: wrap; }
+.browse-live .bl-keys .act.on { color: var(--ice); border-color: var(--ice); }
+.browse-live .bl-note { margin: 0; font: 11px var(--mono); color: var(--faint); }
+.browse-live .bl-go[hidden] { display: none; }

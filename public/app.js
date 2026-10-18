@@ -859,27 +859,83 @@
   if (matchMedia("(hover: none)").matches) $("#usagePanel .usage-hint").textContent = "this month · tap to show";
 
   /* ---------------- mini browser: live view while it works ---------------- */
+  // While it works you watch. When it needs you ("Your turn"), the picture becomes a remote screen:
+  // taps and typing go straight to the cloud browser. What you type there is never saved.
   function watchBrowse(id, threadId, spoken) {
     S.browsing = true;
     const turn = $("#convo").lastElementChild;
     const card = document.createElement("article");
     card.className = "answer browse-live";
     card.innerHTML = `<div class="src"><span class="dot g">🌐</span>Mini browser</div>
+      <div class="bl-turn" hidden><b>Your turn</b><span class="bl-need"></span></div>
       <div class="bl-bar"><span class="bl-dot"></span><span class="bl-url">Starting a browser…</span></div>
-      <div class="bl-screen"><img alt="What the mini browser sees"><div class="bl-wait">Opening a browser in the cloud…</div></div>
+      <div class="bl-screen"><img alt="What the mini browser sees" draggable="false"><div class="bl-wait">Opening a browser in the cloud…</div><i class="bl-tap" hidden></i></div>
+      <div class="bl-remote" hidden>
+        <form class="bl-typeform"><input class="bl-type" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Tap a box on the picture, then type here"><button class="act" type="submit">Type</button></form>
+        <div class="bl-keys"><button class="act" data-key="Enter">Enter</button><button class="act" data-key="Backspace">⌫</button><button class="act" data-key="Tab">Tab</button><button class="act" data-scroll="-450">▲</button><button class="act" data-scroll="450">▼</button><button class="act" data-hold>Press &amp; hold</button></div>
+        <p class="bl-note">Typing here goes only to that website; it isn't saved. Waits about 3 minutes, then moves on.</p>
+      </div>
       <ol class="bl-steps"></ol>
-      <div class="actions"><button class="act" type="button">Stop</button><span class="bl-state">Working · it only looks, never submits anything</span></div>`;
+      <div class="actions"><button class="act send bl-go" type="button" hidden>Continue ▶</button><button class="act bl-stop" type="button">Stop</button><span class="bl-state">Working · it never signs in, pays or submits for you</span></div>`;
     (turn?.querySelector(".answers") || turn || $("#convo")).appendChild(card);
     S.liveBrowse = { id, threadId, el: card };
     const img = card.querySelector("img"), urlEl = card.querySelector(".bl-url"), steps = card.querySelector(".bl-steps"), stateEl = card.querySelector(".bl-state");
-    const stopBtn = card.querySelector(".actions .act");
-    let lastShot = 0, done = false, misses = 0;
+    const stopBtn = card.querySelector(".bl-stop"), goBtn = card.querySelector(".bl-go"), remote = card.querySelector(".bl-remote"), turnBox = card.querySelector(".bl-turn");
+    const screen = card.querySelector(".bl-screen"), tapDot = card.querySelector(".bl-tap");
+    let lastShot = 0, done = false, misses = 0, mine = false, holdNext = false, announced = "";
     if (spoken) speak("Okay, I'm opening the browser. I'll tell you what I find.", () => {});
+    const showShot = (v) => {
+      if (v.shotAt && v.shotAt !== lastShot) {
+        lastShot = v.shotAt;
+        img.src = `/api/browse/${id}/shot?t=${v.shotAt}`;
+        img.onload = () => card.querySelector(".bl-wait")?.remove();
+      }
+    };
+    const send = async (body) => {
+      markActive();
+      card.classList.add("busy");
+      try { const v = await api(`/browse/${id}/input`, { method: "POST", body }); if (v) { showShot(v); urlEl.textContent = v.url || urlEl.textContent; } }
+      catch (err) { toast(err.message); }
+      finally { card.classList.remove("busy"); }
+    };
+    // Tap the picture = tap the website.
+    screen.addEventListener("click", (e) => {
+      if (!mine) return;
+      const r = img.getBoundingClientRect();
+      const x = (e.clientX - r.left) / r.width, y = (e.clientY - r.top) / r.height;
+      if (x < 0 || x > 1 || y < 0 || y > 1) return;
+      tapDot.style.left = `${x * 100}%`; tapDot.style.top = `${y * 100}%`; tapDot.hidden = false; setTimeout(() => (tapDot.hidden = true), 700);
+      if (holdNext) { holdNext = false; card.querySelector("[data-hold]").classList.remove("on"); send({ kind: "hold", x, y, ms: 6000 }); }
+      else send({ kind: "click", x, y });
+    });
+    card.querySelector(".bl-typeform").addEventListener("submit", (e) => {
+      e.preventDefault();
+      const t = card.querySelector(".bl-type");
+      if (!t.value) return;
+      const text = t.value; t.value = "";
+      send({ kind: "type", text });
+    });
+    card.querySelectorAll("[data-key]").forEach((b) => (b.onclick = () => send({ kind: "key", key: b.dataset.key })));
+    card.querySelectorAll("[data-scroll]").forEach((b) => (b.onclick = () => send({ kind: "scroll", dy: +b.dataset.scroll })));
+    card.querySelector("[data-hold]").onclick = (e) => { holdNext = !holdNext; e.currentTarget.classList.toggle("on", holdNext); toast(holdNext ? "Now tap the button to press and hold it (6 seconds)." : "Hold canceled."); };
+    goBtn.onclick = async () => { goBtn.disabled = true; try { await api(`/browse/${id}/resume`, { method: "POST", body: {} }); } catch (err) { toast(err.message); } goBtn.disabled = false; };
     stopBtn.onclick = async () => { stopBtn.disabled = true; stopBtn.textContent = "Stopping…"; try { await api(`/browse/${id}/stop`, { method: "POST", body: {} }); } catch (err) { toast(err.message); } };
+    const setMine = (on, need) => {
+      mine = on;
+      card.classList.toggle("yours", on);
+      turnBox.hidden = !on; remote.hidden = !on; goBtn.hidden = !on;
+      card.querySelector(".bl-need").textContent = need || "";
+      stateEl.textContent = on ? "Waiting for you" : "Working · it never signs in, pays or submits for you";
+      if (on && need !== announced) {
+        announced = need;
+        toast("The mini browser needs you for a moment.", 6000);
+        if (spoken || $("#speakToggle").checked || $("#glassesToggle").checked) speak(`I need you for a second. ${need}`, () => {});
+        try { navigator.vibrate && navigator.vibrate([120, 80, 120]); } catch {}
+        card.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+    };
     const finish = async (v) => {
-      done = true; S.browsing = false; stopBtn.remove(); S.liveBrowse = null; card.remove();
-      stateEl.textContent = v.status === "done" ? "Done" : v.status === "stopped" ? "Stopped" : `Stopped: ${v.error || "something went wrong"}`;
-      card.classList.add("finished");
+      done = true; S.browsing = false; S.liveBrowse = null; card.remove();
       await sync();
       if (S.currentId === threadId) await openThread(threadId, true);
       if (spoken || $("#speakToggle").checked || $("#glassesToggle").checked) {
@@ -893,16 +949,14 @@
       try { v = await api(`/browse/${id}`, { bg: true }); misses = 0; }
       catch (err) { if (err.locked || ++misses > 20) { S.browsing = false; return; } return setTimeout(tick, 2500); }
       urlEl.textContent = v.url ? `${v.title ? v.title + " · " : ""}${v.url}` : "Searching for where to start…";
-      if (v.shotAt && v.shotAt !== lastShot) {
-        lastShot = v.shotAt;
-        img.src = `/api/browse/${id}/shot?t=${v.shotAt}`;
-        img.onload = () => card.querySelector(".bl-wait")?.remove();
-      }
+      showShot(v);
       const box = $("#convo"), near = box.scrollHeight - box.scrollTop - box.clientHeight < 160;
       steps.innerHTML = v.steps.map((st) => `<li>${esc(st.note || "")}</li>`).join("");
-      if (near) box.scrollTop = box.scrollHeight;
-      if (v.status !== "running") return finish(v);
-      setTimeout(tick, 1500);
+      if (near && !mine) box.scrollTop = box.scrollHeight;
+      if (v.status === "needs_you") { setMine(true, v.need); markActive(); }
+      else if (mine) setMine(false);
+      if (!["running", "needs_you"].includes(v.status)) return finish(v);
+      setTimeout(tick, mine ? 900 : 1500);
     };
     tick();
   }

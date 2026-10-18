@@ -36,3 +36,9 @@ Ask things like "find the cheapest hotel near Albuquerque next weekend", "what a
 Start a message with **browse**, **go to** or **open**, or say **use the browser** — for example "browse Kayak for the cheapest hotel in Albuquerque Oct 23–25" or "go to abqlibrary.org and find this week's events". A live card shows the page the cloud browser is on, updating every second or two, with each step listed underneath and a **Stop** button. It keeps working on the server even if you lock your phone or close the page; the answer lands in the conversation with a picture of the last screen and the pages it visited.
 
 This step only looks (open, scroll, follow links, read). It never types into forms, signs in, books or submits anything. It's free: G decides each step, and Cloudflare's free plan includes 10 minutes of browser time a day (a run takes about 1–3 minutes; it stops itself after 5).
+
+## Web helper — step 3: Clicking, typing and "Your turn"
+
+The mini browser can now click buttons, tabs and filters, type into search boxes, pick dates and options, and press Enter. Before clicking through forms it tries shortcuts: the site's **llms.txt** guide for AI, the page's **structured data** (hours, prices, events), and **search links** with the details already filled in.
+
+It never signs in, enters personal details, pays, books, sends or submits anything. When a step needs you — a sign-in, a final "Book" or "Submit", or an "are you a robot?" check — the card turns into **Your turn**: tap and type on the live picture (taps go straight to the cloud browser; typing isn't saved), then tap **Continue**. If you don't respond in about 3 minutes it skips that site and keeps going. Waiting still uses a little of the 10 free browser minutes a day.
