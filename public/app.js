@@ -34,7 +34,7 @@
   async function api(path, opts = {}) {
     const r = await fetch("/api" + path, {
       method: opts.method || "GET",
-      headers: { ...(opts.body ? { "content-type": "application/json" } : {}), ...(opts.bg ? { "x-sz-bg": "1" } : {}) },
+      headers: { ...(opts.body ? { "content-type": "application/json" } : {}), ...(opts.bg ? { "x-sz-bg": "1" } : {}), "x-sz-idle": String(lockMins) },
       body: opts.body ? JSON.stringify(opts.body) : undefined,
       credentials: "same-origin",
     });
@@ -50,7 +50,7 @@
     stopVoice();
     $("#app").hidden = true; $("#login").hidden = false;
     document.body.classList.toggle("is-locked", Boolean(locked));
-    $("#loginSub").textContent = locked ? "Locked after 5 idle minutes" : "Sign in to continue";
+    $("#loginSub").textContent = locked ? `Locked after ${lockMins === 60 ? "1 hour" : lockMins + " idle minutes"}` : "Sign in to continue";
     const pk = Boolean(locked && local.get("pkSet", false) && window.PublicKeyCredential);
     $("#pkBtn").hidden = !pk; $("#pkOr").hidden = !pk;
     $("#loginErr").textContent = "";
@@ -75,7 +75,13 @@
   $("#logout").onclick = async () => { try { await api("/logout", { method: "POST" }); } catch {} showLogin(); };
 
   /* ---------------- idle lock ---------------- */
-  const IDLE_MS = 5 * 60 * 1000;
+  // Each device has its own idle lock (5, 15, 30 or 60 minutes), sent to the server so both agree.
+  let lockMins = [5, 15, 30, 60].includes(+local.get("lockMins", 5)) ? +local.get("lockMins", 5) : 5;
+  let IDLE_MS = lockMins * 60 * 1000;
+  function showLockSetting() {
+    if ($("#lockAfter")) $("#lockAfter").value = String(lockMins);
+    if ($("#lockLabel")) $("#lockLabel").textContent = `locks after ${lockMins === 60 ? "1 hour" : lockMins + " idle min"}`;
+  }
   let lastActive = Date.now();
   function markActive() { lastActive = Date.now(); }
   ["pointerdown", "keydown", "wheel", "touchstart", "input"].forEach((ev) => window.addEventListener(ev, markActive, { passive: true, capture: true }));
@@ -158,6 +164,12 @@
   $("#pkBtn").onclick = () => unlockWithPasskey(false);
   $("#pkSetup").onclick = setupPasskey;
   $("#lockNow").onclick = lockNow;
+  showLockSetting();
+  $("#lockAfter").onchange = async (e) => {
+    lockMins = +e.target.value; IDLE_MS = lockMins * 60 * 1000; local.set("lockMins", lockMins); markActive(); showLockSetting();
+    try { await api("/state"); } catch {} // refresh the unlock with the new length
+    toast(`This device now locks after ${lockMins === 60 ? "1 hour" : lockMins + " minutes"} of no activity.`);
+  };
   async function renderSecurity() {
     const ok = await platformAvailable();
     const on = local.get("pkSet", false);
@@ -533,6 +545,21 @@
       toast(`Switched to ${name}.`);
       if (voice.turn || voice.followUp) { voice.turn = false; speak(`Okay, using ${{ C: "Claude", G: "Gemini", M: "Muse" }[name] || name}.`); }
       return;
+    }
+    // While the mini browser is working, short commands steer it (typed or spoken).
+    if (S.liveBrowse && text && !S.files.length) {
+      const card = S.liveBrowse.el, said = text.toLowerCase().replace(/[.!?]+$/, "").trim();
+      const reply = (msg) => { q.value = ""; grow(); toast(msg); if (voice.turn || voice.followUp) { voice.turn = false; speak(msg, () => {}); } };
+      if (/^(stop|cancel|stop it|stop browsing|never ?mind)$/.test(said)) { card.querySelector(".bl-stop")?.click(); return reply("Okay, stopping the browser."); }
+      if (/^(continue|keep going|go on|i'?m done|done|ok(ay)? continue|resume)$/.test(said)) {
+        const go = card.querySelector(".bl-go");
+        if (go && !go.hidden) { go.click(); return reply("Okay, picking it back up."); }
+        return reply("It's already working.");
+      }
+      if (/^(what('?s| is) (it|that|happening|going on)( now)?|status|where are you|what are you doing)$/.test(said)) {
+        const steps = [...card.querySelectorAll(".bl-steps li")].map((li) => li.textContent);
+        return reply(steps.length ? `Right now: ${steps[steps.length - 1]}` : "It's just getting started.");
+      }
     }
     if (S.busy || (!text && !S.files.length)) return;
     const mode = effectiveMode();

@@ -1,5 +1,5 @@
 // Sobriazar server: login, synced history, and the calls to Gemini, Claude and Muse.
-import { LOCK_SCHEMA, awakeCookie, clearAwake, isAwake, listPasskeys, registerOptions, registerVerify, loginOptions, loginVerify, deletePasskey } from "./lock.js";
+import { LOCK_SCHEMA, awakeCookie, idleMs, clearAwake, isAwake, listPasskeys, registerOptions, registerVerify, loginOptions, loginVerify, deletePasskey } from "./lock.js";
 import { GOOGLE_SCHEMA, TOOLS, TOOL_LABELS, googleReady, startConnect, finishConnect, listAccounts, disconnect, pickerConfig, listLibrary, addToLibrary, removeFromLibrary, runTool, saveDoc, wantsAccounts, sendEmail, sendFromAccount } from "./google.js";
 // Keys live only here, as Cloudflare secrets. They never reach the browser.
 export { BrowseRun } from "./browse.js";
@@ -43,7 +43,7 @@ export default {
       if (!res.headers.has("x-sz-awake")) return res;
       const out = new Response(res.body, res);
       out.headers.delete("x-sz-awake");
-      if (!request.headers.get("x-sz-bg")) out.headers.append("Set-Cookie", await awakeCookie(env));
+      if (!request.headers.get("x-sz-bg")) out.headers.append("Set-Cookie", await awakeCookie(env, idleMs(request)));
       return out;
     } catch (err) {
       return json({ error: err.message || "Something went wrong on the server." }, err.status || 500);
@@ -74,7 +74,7 @@ async function route(request, env, url) {
   if (path === "/api/passkey/login/options" && method === "POST") return json(await loginOptions(env, url));
   if (path === "/api/passkey/login/verify" && method === "POST") {
     await loginVerify(env, url, await request.json());
-    return json({ ok: true }, 200, { "Set-Cookie": await awakeCookie(env) });
+    return json({ ok: true }, 200, { "Set-Cookie": await awakeCookie(env, idleMs(request)) });
   }
 
   if (!(await isAwake(request, env))) return json({ error: "Locked.", locked: true }, 423);
@@ -215,7 +215,7 @@ async function login(request, env) {
   const token = `${exp}.${await sign(env, String(exp))}`;
   const r = json({ ok: true });
   r.headers.append("Set-Cookie", cookie(token, SESSION_DAYS * 86400));
-  r.headers.append("Set-Cookie", await awakeCookie(env));
+  r.headers.append("Set-Cookie", await awakeCookie(env, idleMs(request)));
   return r;
 }
 

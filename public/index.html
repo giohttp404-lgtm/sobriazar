@@ -96,7 +96,8 @@
     </section>
 
     <section class="panel" id="securityPanel">
-      <h2 class="label">Security <span>locks after 5 idle min</span></h2>
+      <h2 class="label">Security <span id="lockLabel">locks after 5 idle min</span></h2>
+      <label class="sendfrom"><span>Lock after (this device)</span><select id="lockAfter"><option value="5">5 minutes</option><option value="15">15 minutes</option><option value="30">30 minutes</option><option value="60">1 hour</option></select></label>
       <p class="hint" id="pkStatus">Face ID or fingerprint unlock isn't set up on this device.</p>
       <div class="acct-actions">
         <button class="btn" type="button" id="pkSetup">Set up Face ID or fingerprint</button>

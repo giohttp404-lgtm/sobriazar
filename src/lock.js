@@ -20,9 +20,14 @@ async function sig(env, data) {
   return b64(new Uint8Array(await crypto.subtle.sign("HMAC", key, enc.encode(data)))).replace(/[+/=]/g, (c) => ({ "+": "-", "/": "_", "=": "" }[c]));
 }
 
-export async function awakeCookie(env) {
-  const exp = Date.now() + AWAKE_MS;
-  return `sz_awake=${exp}.${await sig(env, String(exp))}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${Math.round(AWAKE_MS / 1000) + 60}`;
+// Each device picks its own idle lock (5, 15, 30 or 60 minutes); the app sends it as x-sz-idle.
+export function idleMs(request) {
+  const m = Number(request?.headers?.get("x-sz-idle"));
+  return [5, 15, 30, 60].includes(m) ? m * 60 * 1000 : AWAKE_MS;
+}
+export async function awakeCookie(env, ms = AWAKE_MS) {
+  const exp = Date.now() + ms;
+  return `sz_awake=${exp}.${await sig(env, String(exp))}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=${Math.round(ms / 1000) + 60}`;
 }
 export const clearAwake = "sz_awake=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0";
 
