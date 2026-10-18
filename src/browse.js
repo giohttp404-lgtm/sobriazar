@@ -28,7 +28,7 @@ export class BrowseRun extends DurableObject {
     const run = {
       id: o.id, task: String(o.task || "").slice(0, 2000), threadId: o.threadId, tz: o.tz || "America/Denver", voice: !!o.voice,
       status: "running", steps: [], notes: "", visited: [], answer: "", error: "", startedAt: Date.now(), stepCount: 0, fails: 0,
-      sessionId: null, url: "", title: "", shotAt: 0,
+      sessionId: null, url: "", title: "", shotAt: 0, search: [],
     };
     await this.ctx.storage.put("run", run);
     await this.ctx.storage.setAlarm(Date.now() + 50);
@@ -110,7 +110,7 @@ export class BrowseRun extends DurableObject {
       if (!run.url) {
         const pasted = (run.task.match(/https?:\/\/[^\s<>"')]+/) || [])[0];
         if (pasted) { await safeGoto(page, pasted); obs = await observe(page); }
-        else obs = { search: await findStart(this.env, run.task) };
+        else { run.search = await findStart(this.env, run.task); obs = { search: run.search }; }
       } else obs = await observe(page);
       if (obs.url) { run.url = obs.url; run.title = obs.title; await this.saveShot(page, run); }
 
@@ -119,7 +119,7 @@ export class BrowseRun extends DurableObject {
       run.steps.push({ at: Date.now(), note: decision.status || decision.action, url: obs.url || "" });
 
       if (decision.action === "answer" || overTime) {
-        run.answer = decision.answer || run.notes || "I couldn't find the answer.";
+        run.answer = (decision.answer || "").trim().length > 40 ? decision.answer : await writeFinal(this.env, run);
         run.status = "done";
         await this.ctx.storage.put("run", run);
         await browser.close().catch(() => {});
@@ -209,9 +209,11 @@ async function findStart(env, task) {
 async function decide(env, run, obs, overTime) {
   const now = new Date().toLocaleString("en-US", { timeZone: run.tz, weekday: "long", month: "long", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" });
   const history = run.steps.slice(-8).map((s, i) => `${i + 1}. ${s.note}${s.url ? ` [${s.url}]` : ""}`).join("\n") || "(none yet)";
+  const blocked = !obs.search && (obs.text.trim().length < 300 || /verify you are (a )?human|are you a robot|captcha|access denied|unusual traffic|request blocked|enable javascript and cookies/i.test(obs.text.slice(0, 2000)));
+  const others = (run.search || []).filter((x) => !run.visited.some((v) => x.includes(v)));
   const view = obs.search
     ? `No page is open yet. Search results for the task:\n${obs.search.join("\n") || "(no results)"}`
-    : `Current page: ${obs.title} (${obs.url}), ${obs.position}\n\nPage text:\n${obs.text}\n\nLinks on screen:\n${obs.links.join("\n")}`;
+    : `Current page: ${obs.title || "(no title)"} (${obs.url}), ${obs.position}${blocked ? "\nTHIS PAGE LOOKS BLOCKED OR EMPTY (the site may block robots). Don't give up: open a different site from the search results below." : ""}\n\nPage text:\n${obs.text || "(empty)"}\n\nLinks on screen:\n${obs.links.join("\n")}${others.length ? `\n\nOther search results you can open:\n${others.join("\n")}` : ""}`;
   const prompt = `You control a web browser for the user. It is ${now} (${run.tz}).
 Task: ${run.task}
 
@@ -244,4 +246,17 @@ function friendlyError(err) {
   if (/429|limit|quota|exceeded|too many/i.test(m) && /browser|session|acquire/i.test(m)) return "Cloudflare's free browser time for today is used up (10 minutes a day). It resets at 6 PM Denver time.";
   if (/busy/i.test(m)) return "Google's G servers are busy; trying again.";
   return m.slice(0, 200);
+}
+
+// Turn the notes into a clean final answer (used when the last step didn't include one).
+async function writeFinal(env, run) {
+  if (!run.notes.trim()) return "I couldn't find the answer on the pages I opened.";
+  try {
+    const { r, j } = await geminiGenerate(env, {
+      contents: [{ role: "user", parts: [{ text: `Task: ${run.task}\n\nNotes from the web pages I visited:\n${run.notes}\n\nWrite the final answer for the user in short markdown: the answer first, then any useful details. Use only facts in the notes; say what you couldn't confirm. No preamble.` }] }],
+      generationConfig: { maxOutputTokens: 2048 },
+    });
+    const t = r.ok ? (j.candidates?.[0]?.content?.parts || []).filter((p) => !p.thought).map((p) => p.text || "").join("").trim() : "";
+    return t || run.notes;
+  } catch { return run.notes; }
 }
