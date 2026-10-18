@@ -875,7 +875,7 @@
     const stopBtn = card.querySelector(".actions .act");
     let lastShot = 0, done = false, misses = 0;
     if (spoken) speak("Okay, I'm opening the browser. I'll tell you what I find.", () => {});
-    stopBtn.onclick = async () => { stopBtn.disabled = true; stopBtn.textContent = "Stopping…"; try { await api(`/browse/${id}/stop`, { method: "POST" }); } catch (err) { toast(err.message); } };
+    stopBtn.onclick = async () => { stopBtn.disabled = true; stopBtn.textContent = "Stopping…"; try { await api(`/browse/${id}/stop`, { method: "POST", body: {} }); } catch (err) { toast(err.message); } };
     const finish = async (v) => {
       done = true; S.browsing = false; stopBtn.remove(); S.liveBrowse = null; card.remove();
       stateEl.textContent = v.status === "done" ? "Done" : v.status === "stopped" ? "Stopped" : `Stopped: ${v.error || "something went wrong"}`;

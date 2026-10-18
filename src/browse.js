@@ -52,14 +52,14 @@ export class BrowseRun extends DurableObject {
     run.status = "stopped";
     run.steps.push({ at: Date.now(), note: "Stopped by you." });
     await this.ctx.storage.put("run", run);
-    await this.closeBrowser(run);
+    this.ctx.waitUntil(this.closeBrowser(run));
     await this.saveToThread(run, `Stopped. ${run.notes ? "Here's what I'd found so far:\n\n" + run.notes : "I hadn't found anything useful yet."}`);
     return this.view(run);
   }
 
   async closeBrowser(run) {
     if (!run.sessionId || !this.env.BROWSER) return;
-    try { const b = await puppeteer.connect(this.env.BROWSER, run.sessionId); await b.close(); } catch {}
+    try { const b = await limit(puppeteer.connect(this.env.BROWSER, run.sessionId), 8000, "Reconnecting"); await limit(b.close(), 5000, "Closing"); } catch {}
   }
 
   async alarm() {
@@ -81,6 +81,8 @@ export class BrowseRun extends DurableObject {
         return;
       }
     }
+    const latest = await this.ctx.storage.get("run");
+    if (latest && latest.status !== "running") { this.ctx.waitUntil(this.closeBrowser(run)); return; } // stopped while this step ran
     if (run.status === "running") {
       await this.ctx.storage.put("run", run);
       await this.ctx.storage.setAlarm(Date.now() + (run.fails ? 4000 : 300));
