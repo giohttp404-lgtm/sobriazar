@@ -71,6 +71,7 @@ export class BrowseRun extends DurableObject {
     } catch (err) {
       run.fails = (run.fails || 0) + 1;
       const msg = friendlyError(err);
+      if (/took too long/.test(msg)) { await this.closeBrowser(run).catch(() => {}); run.sessionId = null; }
       run.steps.push({ at: Date.now(), note: `Problem: ${msg}` });
       if (run.fails >= 3 || /free browser time|isn't set up/.test(msg)) {
         run.status = "error"; run.error = msg;
@@ -89,9 +90,9 @@ export class BrowseRun extends DurableObject {
   async openBrowser(run) {
     if (!this.env.BROWSER) throw new Error("The cloud browser isn't set up on the server.");
     if (run.sessionId) {
-      try { return await puppeteer.connect(this.env.BROWSER, run.sessionId); } catch {}
+      try { return await limit(puppeteer.connect(this.env.BROWSER, run.sessionId), 15000, "Reconnecting to the browser"); } catch {}
     }
-    const b = await puppeteer.launch(this.env.BROWSER, { keep_alive: 120000 });
+    const b = await limit(puppeteer.launch(this.env.BROWSER, { keep_alive: 120000 }), 30000, "Starting the browser");
     run.sessionId = b.sessionId();
     return b;
   }
@@ -101,20 +102,20 @@ export class BrowseRun extends DurableObject {
     const overTime = Date.now() - run.startedAt > MAX_MS || run.stepCount > MAX_STEPS;
     const browser = await this.openBrowser(run);
     try {
-      let page = (await browser.pages())[0] || (await browser.newPage());
-      await page.setViewport(VIEW);
+      let page = (await limit(browser.pages(), 10000, "Finding the page"))[0] || (await limit(browser.newPage(), 10000, "Opening a tab"));
+      await limit(page.setViewport(VIEW), 10000, "Setting the window size");
       if (run.url && page.url() === "about:blank") await safeGoto(page, run.url); // reconnected to a fresh browser
 
       // What the AI sees: the current page, or search results before any page is open.
       let obs;
       if (!run.url) {
         const pasted = (run.task.match(/https?:\/\/[^\s<>"')]+/) || [])[0];
-        if (pasted) { await safeGoto(page, pasted); obs = await observe(page); }
+        if (pasted) { await safeGoto(page, pasted); obs = await limit(observe(page), 15000, "Reading the page"); }
         else { run.search = await findStart(this.env, run.task); obs = { search: run.search }; }
-      } else obs = await observe(page);
+      } else obs = await limit(observe(page), 15000, "Reading the page");
       if (obs.url) { run.url = obs.url; run.title = obs.title; await this.saveShot(page, run); }
 
-      const decision = await decide(this.env, run, obs, overTime);
+      const decision = await limit(decide(this.env, run, obs, overTime), 60000, "G deciding the next step");
       if (decision.notes && decision.notes.trim()) run.notes = (run.notes + `\n- ${decision.notes.trim()}${obs.url ? ` (${obs.title || obs.url})` : ""}`).slice(-6000);
       run.steps.push({ at: Date.now(), note: decision.status || decision.action, url: obs.url || "" });
 
@@ -131,13 +132,13 @@ export class BrowseRun extends DurableObject {
         await safeGoto(page, decision.url);
         if (!run.visited.includes(decision.url)) run.visited.push(decision.url);
       } else if (decision.action === "scroll_down" || decision.action === "scroll_up") {
-        await page.evaluate((d) => window.scrollBy(0, d * window.innerHeight * 0.85), decision.action === "scroll_down" ? 1 : -1);
+        await limit(page.evaluate((d) => window.scrollBy(0, d * window.innerHeight * 0.85), decision.action === "scroll_down" ? 1 : -1), 10000, "Scrolling");
         await sleep(400);
       } else if (decision.action === "back") {
-        await page.goBack({ waitUntil: "domcontentloaded", timeout: 15000 }).catch(() => {});
+        await limit(page.goBack({ waitUntil: "domcontentloaded", timeout: 15000 }), 20000, "Going back").catch(() => {});
         await sleep(500);
       }
-      const after = await observe(page).catch(() => null);
+      const after = await limit(observe(page), 15000, "Reading the page").catch(() => null);
       if (after?.url) { run.url = after.url; run.title = after.title; }
       await this.saveShot(page, run);
       browser.disconnect();
@@ -149,7 +150,7 @@ export class BrowseRun extends DurableObject {
 
   async saveShot(page, run) {
     try {
-      const b64 = await page.screenshot({ type: "jpeg", quality: 45, encoding: "base64" });
+      const b64 = await limit(page.screenshot({ type: "jpeg", quality: 45, encoding: "base64" }), 15000, "Taking a picture");
       if (b64 && b64.length < 120000) { await this.ctx.storage.put("shot", b64); run.shotAt = Date.now(); }
     } catch {}
   }
@@ -170,9 +171,14 @@ export class BrowseRun extends DurableObject {
 }
 
 const sleep = (ms) => new Promise((ok) => setTimeout(ok, ms));
+// Every browser call gets a time limit, so one stuck page can't freeze the whole run.
+function limit(p, ms, what) {
+  let t;
+  return Promise.race([p, new Promise((_, no) => (t = setTimeout(() => no(new Error(`${what} took too long`)), ms)))]).finally(() => clearTimeout(t));
+}
 
 async function safeGoto(page, url) {
-  try { await page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 }); } catch {}
+  try { await limit(page.goto(url, { waitUntil: "domcontentloaded", timeout: 20000 }), 25000, "Loading the page"); } catch {}
   await sleep(1200); // let the page draw
 }
 
