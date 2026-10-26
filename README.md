@@ -25,6 +25,12 @@ Tap the mic (or your glasses) and say something like "find the email from Maria"
 
 Emails always send from one account, set under **Accounts → Send emails from** (giohttp404@gmail.com by default). Nothing is ever sent without your "send it". On screen, every prepared email has **Send** and **Don't send** buttons with the same 5-second countdown.
 
+## Boardroom
+
+Tap **Board** under the message box (or start with "boardroom:", "board," or "delegate") and describe a project. The board picks which AI should take it (Claude, Gemini, ChatGPT or Grok), says why, names a runner-up, and writes a ready-to-paste brief. G makes the decision for free; anything about students goes to C instead, with a reminder to take out names before handing off.
+
+**Open in …** opens that AI's own app or site with the brief filled in where the site allows it, and always copies the brief too, so the work happens on that AI's free tier and stays in its own history. Tap another AI on the card to hand it to someone else, edit the brief first if you like, and paste the chat's link to keep it with the project. **Projects** in the Hub lists every project with its AI and status (To do → In progress → Done; tap to change) and opens the saved chat or the brief again.
+
 ## Web helper — step 1: Research
 
 Ask things like "find the cheapest hotel near Albuquerque next weekend", "what are the hours for the MVD on Montgomery", or paste a link and say "summarize this page". Auto sends these to **Research**: Sobriazar searches the web itself (DuckDuckGo, then Mojeek, no key needed), opens the best pages, and has G write the answer with sources. That's free on your Gemini key. If free search finds nothing or G is busy, C does the research instead (a few cents) and the note above the answer says so. Works by voice too.

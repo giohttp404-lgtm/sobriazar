@@ -114,6 +114,11 @@
     </section>
 
     <section class="panel">
+      <h2 class="label">Projects <span id="projCount"></span></h2>
+      <ul class="projects" id="projects"></ul>
+    </section>
+
+    <section class="panel">
       <h2 class="label">Directives <span id="taskCount"></span></h2>
       <form id="todoForm" class="todo-add">
         <label class="sr" for="todoIn">New task</label>
@@ -181,6 +186,7 @@
           <button type="button" data-mode="muse" title="M only">M</button>
           <button type="button" data-mode="best" title="G drafts, C polishes">Best</button>
           <button type="button" data-mode="all" title="All side by side">All</button>
+          <button type="button" data-mode="board" title="The board picks the best AI for a project and writes its brief">Board</button>
         </div>
         <button type="button" class="lock" id="privBtn" aria-pressed="false" title="Student info: keep it off G">
           <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"/><path d="M8 11V8a4 4 0 0 1 8 0v3"/></svg>

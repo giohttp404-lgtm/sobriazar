@@ -19,12 +19,19 @@
     { id: "email", name: "Email", prompt: "Write a short, friendly, professional email about this:" },
     { id: "spanish", name: "Spanish", prompt: "Translate this into clear, natural Spanish:" },
   ];
-  const LABELS = { auto: ["A", "auto", "Auto"], gemini: ["G", "g", "Result · G"], claude: ["C", "c", "Result · C"], muse: ["M", "m", "Result · M"], best: ["★", "best", "Best result"] };
+  const LABELS = { auto: ["A", "auto", "Auto"], gemini: ["G", "g", "Result · G"], claude: ["C", "c", "Result · C"], muse: ["M", "m", "Result · M"], best: ["★", "best", "Best result"], board: ["⚖", "auto", "Boardroom"] };
+  // The board hands work to each AI's own app. Links fill in the brief where the site allows it; the brief is always copied too.
+  const AIS = {
+    claude: { name: "Claude", q: "https://claude.ai/new?q=", home: "https://claude.ai/new" },
+    gemini: { name: "Gemini", q: null, home: "https://gemini.google.com/app" },
+    chatgpt: { name: "ChatGPT", q: "https://chatgpt.com/?q=", home: "https://chatgpt.com/" },
+    grok: { name: "Grok", q: "https://grok.com/?q=", home: "https://grok.com/" },
+  };
   const OFF_PRIVATE = ["gemini", "muse", "all"];
   const MAX_BYTES = 18 * 1024 * 1024;
 
   const S = {
-    threads: [], todos: [], currentId: null, messages: [], mode: ((m) => (m === "both" ? "all" : m))(local.get("autoIntro", false) ? local.get("mode", "auto") : (local.set("autoIntro", true), local.set("mode", "auto"), "auto")), keys: { gemini: true, claude: true, muse: false },
+    threads: [], todos: [], projects: [], currentId: null, messages: [], mode: ((m) => (m === "both" ? "all" : m))(local.get("autoIntro", false) ? local.get("mode", "auto") : (local.set("autoIntro", true), local.set("mode", "auto"), "auto")), keys: { gemini: true, claude: true, muse: false },
     google: { ready: false, picker: false, accounts: [], library: [] }, forceAccounts: false, sendFrom: null,
     priv: local.get("priv", false), files: [],
     skills: local.get("skills", null) || DEFAULT_SKILLS, skillUses: local.get("skillUses", {}), skillSort: local.get("skillSort", "used"), busy: false, notesDirty: false, budget: 5, lastSync: 0,
@@ -210,7 +217,7 @@
     let st;
     try { st = await api("/state", { bg }); } catch (err) { if (!err.locked) setStatus("off", "OFFLINE"); return; }
     showApp();
-    S.threads = st.threads; S.todos = st.todos; S.budget = st.budget; S.lastSync = Date.now();
+    S.threads = st.threads; S.todos = st.todos; S.projects = st.projects || []; S.budget = st.budget; S.lastSync = Date.now();
     if (!S.notesDirty && document.activeElement !== $("#notes")) $("#notes").value = st.notes;
     if (!$("#skillDlg").open) {
       S.skills = st.skills || DEFAULT_SKILLS; S.skillUses = st.skillUses || {}; S.skillSort = st.skillSort || "used";
@@ -221,7 +228,7 @@
     S.google = st.google || S.google; S.sendFrom = st.sendFrom || null; renderGoogle();
     if (S.mode === "muse" && !S.keys.muse) { S.mode = "gemini"; local.set("mode", S.mode); }
     renderMode();
-    renderUsage(st.usage); renderHistory(); renderTodos();
+    renderUsage(st.usage); renderHistory(); renderTodos(); renderProjects();
     if (first) {
       const last = local.get("thread", null);
       if (last && S.threads.some((t) => t.id === last)) openThread(last, true);
@@ -269,6 +276,84 @@
     $("#clock .date").textContent = d.toLocaleDateString(undefined, { weekday: "short", month: "short", day: "numeric" });
   }
   tick(); setInterval(tick, 1000);
+
+  /* ---------------- boardroom projects ---------------- */
+  function handOff(ai, brief, projectId) {
+    const A = AIS[ai] || AIS.claude;
+    const fill = A.q && brief.length <= 3500;
+    window.open(fill ? A.q + encodeURIComponent(brief) : A.home, "_blank", "noopener");
+    navigator.clipboard?.writeText(brief).catch(() => {});
+    toast(fill ? `Opening ${A.name} with the brief. It's copied too, in case it doesn't fill in.` : `Brief copied. Paste it into ${A.name}.`);
+    const p = S.projects.find((x) => x.id === projectId);
+    if (p && (p.status === "todo" || p.ai !== ai)) updateProject(projectId, { status: p.status === "done" ? "done" : "working", ai });
+  }
+  async function updateProject(id, patch) {
+    const p = S.projects.find((x) => x.id === id);
+    if (p) { Object.assign(p, patch); renderProjects(); }
+    try { const { project } = await api(`/projects/${id}`, { method: "PATCH", body: patch }); if (p && project) { Object.assign(p, project); renderProjects(); } }
+    catch (err) { toast(err.message); }
+  }
+  const STATUS = { todo: "To do", working: "In progress", done: "Done" };
+  function renderProjects() {
+    const ul = $("#projects"); if (!ul) return;
+    ul.innerHTML = "";
+    if (!S.projects.length) ul.innerHTML = `<li class="empty" style="display:block">Nothing yet. Tap Board under the message box and describe a project.</li>`;
+    S.projects.forEach((p) => {
+      const li = document.createElement("li"); li.className = "proj" + (p.status === "done" ? " done" : "");
+      li.innerHTML = `<span class="ai-tag ai-${p.ai}"></span><span class="t"></span><span class="pr-acts"><button class="act st" type="button"></button><button class="act op" type="button">Open</button><button class="x" type="button" aria-label="Delete project">×</button></span>`;
+      li.querySelector(".ai-tag").textContent = (AIS[p.ai] || AIS.claude).name;
+      li.querySelector(".t").textContent = p.title;
+      li.querySelector(".t").title = p.why || "";
+      const st = li.querySelector(".st"); st.textContent = STATUS[p.status] || "To do";
+      st.title = "Tap to change";
+      st.onclick = () => updateProject(p.id, { status: p.status === "todo" ? "working" : p.status === "working" ? "done" : "todo" });
+      li.querySelector(".op").onclick = () => { if (p.link) window.open(p.link, "_blank", "noopener"); else handOff(p.ai, p.brief, p.id); };
+      li.querySelector(".op").title = p.link ? "Open the saved chat" : `Open ${(AIS[p.ai] || AIS.claude).name} with the brief`;
+      li.querySelector(".x").onclick = async () => {
+        if (!confirm(`Delete "${p.title}" from your projects? The chat in ${(AIS[p.ai] || AIS.claude).name} stays there.`)) return;
+        S.projects = S.projects.filter((x) => x !== p); renderProjects();
+        try { await api(`/projects/${p.id}`, { method: "DELETE" }); } catch (err) { toast(err.message); }
+      };
+      ul.appendChild(li);
+    });
+    const open = S.projects.filter((p) => p.status !== "done").length;
+    $("#projCount").textContent = S.projects.length ? `${open} open` : "";
+  }
+  // The card under a Boardroom answer: who got it, the brief (editable), and the hand-off buttons.
+  function boardCard(b) {
+    const card = document.createElement("div"); card.className = "board-card";
+    let ai = (S.projects.find((x) => x.id === b.id) || {}).ai || b.pick;
+    card.innerHTML = `<div class="bc-ais" role="group" aria-label="Who takes it"></div>
+      ${b.warn ? `<p class="bc-warn"></p>` : ""}
+      <label class="bc-lab">Brief <span>edit it if you like</span></label>
+      <textarea class="bc-brief" rows="7"></textarea>
+      <div class="bc-acts"><button class="btn primary bc-open" type="button"></button><button class="act bc-copy" type="button">Copy brief</button></div>
+      <div class="bc-link"><input type="url" placeholder="Paste the chat's link to keep it with the project" autocomplete="off"><button class="act" type="button">Save link</button></div>`;
+    if (b.warn) card.querySelector(".bc-warn").textContent = b.warn;
+    const ta = card.querySelector(".bc-brief"); ta.value = (S.projects.find((x) => x.id === b.id) || {}).brief || b.brief;
+    const paint = () => {
+      const row = card.querySelector(".bc-ais"); row.innerHTML = "";
+      Object.entries(AIS).forEach(([k, A]) => {
+        const btn = document.createElement("button"); btn.type = "button"; btn.className = `ai-pick ai-${k}`; btn.setAttribute("aria-pressed", String(k === ai));
+        btn.innerHTML = `<span></span>${k === b.pick ? "<small>Board's pick</small>" : k === b.also ? "<small>Runner-up</small>" : ""}`;
+        btn.firstChild.textContent = A.name;
+        btn.onclick = () => { ai = k; paint(); if (S.projects.some((x) => x.id === b.id)) updateProject(b.id, { ai: k }); };
+        row.appendChild(btn);
+      });
+      card.querySelector(".bc-open").textContent = `Open in ${AIS[ai].name}`;
+    };
+    paint();
+    ta.onchange = () => { if (ta.value.trim() && S.projects.some((x) => x.id === b.id)) updateProject(b.id, { brief: ta.value }); };
+    card.querySelector(".bc-open").onclick = () => handOff(ai, ta.value.trim() || b.brief, b.id);
+    card.querySelector(".bc-copy").onclick = (e) => copy(e.currentTarget, ta.value, false);
+    const linkIn = card.querySelector(".bc-link input");
+    linkIn.value = (S.projects.find((x) => x.id === b.id) || {}).link || "";
+    card.querySelector(".bc-link button").onclick = () => {
+      if (!S.projects.some((x) => x.id === b.id)) return toast("That project was deleted.");
+      updateProject(b.id, { link: linkIn.value.trim() }); toast("Link saved. Open it any time from Projects in the Hub.");
+    };
+    return card;
+  }
 
   /* ---------------- todos ---------------- */
   function renderTodos() {
@@ -505,6 +590,8 @@
     }
     const mail = (m.files || []).find((f) => f.email);
     if (mail && m.id) el.appendChild(mailCard(m.id, mail.email));
+    const board = (m.files || []).find((f) => f.board);
+    if (board) el.appendChild(boardCard(board.board));
     const a = document.createElement("div"); a.className = "actions";
     a.innerHTML = `<button class="act" type="button">Copy</button><button class="act" type="button">Copy plain text</button>`;
     const [rich, plainBtn] = a.children;
@@ -534,10 +621,10 @@
 
   async function send() {
     const text = q.value.trim();
-    const sw = text.match(/^(?:ok(?:ay)?\s+|please\s+)?(?:use|switch to|go back to|back to|change to)\s+(claude|gemini|google|muse|meta|best|auto|all)[.!]?$/i);
+    const sw = text.match(/^(?:ok(?:ay)?\s+|please\s+)?(?:use|switch to|go back to|back to|change to)\s+(claude|gemini|google|muse|meta|best|auto|all|the board|board(?:\s?room)?)[.!]?$/i);
     if (sw && !S.files.length) {
-      const m = { claude: "claude", gemini: "gemini", google: "gemini", muse: "muse", meta: "muse", best: "best", auto: "auto", all: "all" }[sw[1].toLowerCase()];
-      const name = { claude: "C", gemini: "G", muse: "M", best: "Best", auto: "Auto", all: "All" }[m];
+      const m = { claude: "claude", gemini: "gemini", google: "gemini", muse: "muse", meta: "muse", best: "best", auto: "auto", all: "all" }[sw[1].toLowerCase()] || "board";
+      const name = { claude: "C", gemini: "G", muse: "M", best: "Best", auto: "Auto", all: "All", board: "the Board" }[m];
       q.value = ""; grow();
       if (m === "muse" && !S.keys.muse) { toast("M isn't set up yet."); return; }
       if (S.priv && OFF_PRIVATE.includes(m)) { toast(`Private is on, so ${name} is off. Turn off Private first.`); return; }
@@ -579,6 +666,7 @@
       const res = await api("/ask", { method: "POST", body: { threadId: S.currentId, text, mode, files, private: S.priv, voice: Boolean(voice.turn), tz: Intl.DateTimeFormat().resolvedOptions().timeZone, ...(S.forceAccounts ? { useAccounts: true } : {}) } });
       if (S.currentId !== res.threadId) { S.currentId = res.threadId; local.set("thread", res.threadId); }
       S.messages.push(res.user, ...res.replies);
+      if (res.project) { S.projects = [res.project, ...S.projects.filter((p) => p.id !== res.project.id)]; renderProjects(); }
       pending.replaceWith(turnEl(res.user, res.replies));
       if (res.browse) { const wasVoice = voice.turn; voice.turn = false; watchBrowse(res.browse.id, res.threadId, wasVoice); }
       else afterAnswer(res.replies);
@@ -1277,7 +1365,7 @@
   function Galaxy(canvas) {
     const ctx = canvas.getContext("2d");
     const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
-    const TINTS = { gemini: [111, 190, 255], claude: [255, 140, 90], muse: [190, 150, 255], best: [120, 230, 180], all: [200, 220, 255], auto: [230, 120, 160] };
+    const TINTS = { board: [255, 200, 120], gemini: [111, 190, 255], claude: [255, 140, 90], muse: [190, 150, 255], best: [120, 230, 180], all: [200, 220, 255], auto: [230, 120, 160] };
     const RED = [255, 74, 60], BLUE = [90, 210, 255];
     let w = 0, h = 0, dpr = 1, raf = 0, running = false, last = 0;
     let parts = [], busy = false, energy = 0, tint = TINTS.gemini, tintNow = [...TINTS.gemini];

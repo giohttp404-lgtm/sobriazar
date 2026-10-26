@@ -13,6 +13,7 @@ const SCHEMA = [
   `CREATE TABLE IF NOT EXISTS usage (month TEXT NOT NULL, engine TEXT NOT NULL, requests INTEGER NOT NULL DEFAULT 0, cost REAL NOT NULL DEFAULT 0, PRIMARY KEY (month, engine))`,
   `CREATE TABLE IF NOT EXISTS gemini_daily (day TEXT PRIMARY KEY, requests INTEGER NOT NULL DEFAULT 0)`,
   `CREATE TABLE IF NOT EXISTS login_attempts (ip TEXT PRIMARY KEY, count INTEGER NOT NULL, first INTEGER NOT NULL)`,
+  `CREATE TABLE IF NOT EXISTS projects (id TEXT PRIMARY KEY, title TEXT NOT NULL, ai TEXT NOT NULL, why TEXT, brief TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'todo', link TEXT, thread_id TEXT, created INTEGER NOT NULL, updated INTEGER NOT NULL)`,
 ];
 
 // Claude prices in dollars per million tokens (from Anthropic's pricing page, Oct 2026).
@@ -182,6 +183,27 @@ async function routeApp(request, env, url, path, method) {
       return json({ ok: true });
     }
   }
+  if ((m = path.match(/^\/api\/projects\/([\w-]+)$/))) {
+    const id = m[1];
+    if (method === "DELETE") { await env.DB.prepare("DELETE FROM projects WHERE id = ?").bind(id).run(); return json({ ok: true }); }
+    if (method === "PATCH") {
+      const b = await request.json();
+      const sets = [], vals = [];
+      if (["todo", "working", "done"].includes(b.status)) { sets.push("status = ?"); vals.push(b.status); }
+      if (BOARD_AIS.includes(b.ai)) { sets.push("ai = ?"); vals.push(b.ai); }
+      if (typeof b.brief === "string" && b.brief.trim()) { sets.push("brief = ?"); vals.push(b.brief.slice(0, 20000)); }
+      if (typeof b.title === "string" && b.title.trim()) { sets.push("title = ?"); vals.push(b.title.trim().slice(0, 80)); }
+      if (typeof b.link === "string") {
+        const link = b.link.trim();
+        if (link && !/^https:\/\/\S+$/i.test(link)) throw httpError(400, "Paste the full chat link (it starts with https://).");
+        sets.push("link = ?"); vals.push(link.slice(0, 500) || null);
+      }
+      if (!sets.length) throw httpError(400, "Nothing to change.");
+      sets.push("updated = ?"); vals.push(Date.now());
+      await env.DB.prepare(`UPDATE projects SET ${sets.join(", ")} WHERE id = ?`).bind(...vals, id).run();
+      return json({ project: await env.DB.prepare("SELECT id, title, ai, why, brief, status, link, thread_id, updated FROM projects WHERE id = ?").bind(id).first() });
+    }
+  }
   if (path === "/api/todos/clear-done" && method === "POST") {
     await env.DB.prepare("DELETE FROM todos WHERE done = 1").run();
     return json({ ok: true });
@@ -254,12 +276,13 @@ async function safeEqual(a, b) {
 async function state(env) {
   const month = new Date().toISOString().slice(0, 7);
   const day = new Date().toISOString().slice(0, 10);
-  const [threads, todos, settings, usage, gday] = await env.DB.batch([
+  const [threads, todos, settings, usage, gday, projects] = await env.DB.batch([
     env.DB.prepare("SELECT id, title, updated FROM threads ORDER BY updated DESC LIMIT 200"),
     env.DB.prepare("SELECT id, text, done, created FROM todos ORDER BY done ASC, created DESC"),
     env.DB.prepare("SELECT key, value FROM settings"),
     env.DB.prepare("SELECT engine, requests, cost FROM usage WHERE month = ?").bind(month),
     env.DB.prepare("SELECT requests FROM gemini_daily WHERE day = ?").bind(day),
+    env.DB.prepare("SELECT id, title, ai, why, brief, status, link, thread_id, updated FROM projects ORDER BY CASE status WHEN 'done' THEN 1 ELSE 0 END, updated DESC LIMIT 100"),
   ]);
   const s = Object.fromEntries(settings.results.map((r) => [r.key, r.value]));
   const claude = usage.results.find((r) => r.engine === "claude") || { requests: 0, cost: 0 };
@@ -269,6 +292,7 @@ async function state(env) {
   return json({
     threads: threads.results,
     todos: todos.results,
+    projects: projects.results,
     notes: s.notes || "",
     skills: s.skills ? JSON.parse(s.skills) : null,
     skillUses: s.skill_uses ? JSON.parse(s.skill_uses) : {},
@@ -396,14 +420,17 @@ async function ask(request, env) {
   const files = Array.isArray(body.files) ? body.files.slice(0, 10) : [];
   let priv = Boolean(body.private);
   let mode = body.mode === "both" ? "all" : body.mode;
-  if (!["auto", "gemini", "claude", "muse", "best", "all"].includes(mode)) mode = "auto";
+  if (!["auto", "gemini", "claude", "muse", "best", "all", "board"].includes(mode)) mode = "auto";
+  // "boardroom: ...", "board, ...", "delegate ...": the board picks which AI should take the project.
+  const boardLead = text.match(/^(?:hey\s+|ok(?:ay)?\s+)?(?:board(?:\s?room)?|delegate(?: this)?|hand (?:this|it) off)\b[\s,.:;!-]*/i);
+  if (boardLead && text.length > boardLead[0].length) { mode = "board"; text = text.slice(boardLead[0].length).trim(); asked = null; }
   let askedNote = null;
   if (asked) {
     if (asked === "muse" && !env.META_API_KEY) { askedNote = "M isn't set up, so C answered"; asked = "claude"; }
     if (priv && (asked === "gemini" || asked === "muse")) { askedNote = "Private is on, so C answered"; asked = "claude"; }
     mode = asked;
   }
-  if (priv && mode !== "claude" && mode !== "best" && mode !== "auto") mode = "claude";
+  if (priv && mode !== "claude" && mode !== "best" && mode !== "auto" && mode !== "board") mode = "claude";
   if (!text && !files.length) throw httpError(400, asked ? "Say what you want to ask after the name, like \u201cuse Claude, write an email to my principal.\u201d" : "Type something or attach a file.");
 
   const now = Date.now();
@@ -434,6 +461,23 @@ async function ask(request, env) {
     await env.BROWSE.get(env.BROWSE.idFromName(id)).start({ id, task: text, threadId, tz: validTz(body.tz), voice: Boolean(body.voice) });
     await env.DB.prepare("UPDATE threads SET updated = ? WHERE id = ?").bind(Date.now(), threadId).run();
     return json({ threadId, user: userMsg, replies: [], browse: { id }, mode: "browser", route: "Mini browser" });
+  }
+
+  if (mode === "board") {
+    const b = await boardroom(env, { text, files, history, priv });
+    const id = uid(), t = Date.now();
+    await env.DB.prepare("INSERT INTO projects (id, title, ai, why, brief, status, link, thread_id, created, updated) VALUES (?, ?, ?, ?, ?, 'todo', NULL, ?, ?, ?)")
+      .bind(id, b.title, b.pick, b.why, b.brief, threadId, t, t).run();
+    const N = BOARD_NAMES;
+    const content = `**The board picked ${N[b.pick]}.** ${b.why}\n\nRunner-up: ${N[b.also]}. ${b.files ? "Attach your file there too. " : ""}The brief is ready below: tap **Open in ${N[b.pick]}** and the work happens in ${N[b.pick]}'s own app, on its free tier.`;
+    const files2 = [{ route: `Boardroom \u2192 ${N[b.pick]}${b.via ? " · decided by " + b.via : ""}` }, { board: { id, title: b.title, pick: b.pick, why: b.why, also: b.also, brief: b.brief, warn: b.warn || null } }];
+    const msg = { id: uid(), role: "assistant", engine: "board", content, files: files2, created: Date.now() };
+    await env.DB.batch([
+      env.DB.prepare("INSERT INTO messages (id, thread_id, role, engine, content, files, created) VALUES (?, ?, 'assistant', 'board', ?, ?, ?)").bind(msg.id, threadId, content, JSON.stringify(files2), msg.created),
+      env.DB.prepare("UPDATE threads SET updated = ? WHERE id = ?").bind(Date.now(), threadId),
+    ]);
+    const project = await env.DB.prepare("SELECT id, title, ai, why, brief, status, link, thread_id, updated FROM projects WHERE id = ?").bind(id).first();
+    return json({ threadId, user: userMsg, replies: [msg], mode: "board", route: "Boardroom", project });
   }
 
   const turn = { text, files };
@@ -493,6 +537,68 @@ async function ask(request, env) {
   await env.DB.batch(stmts);
 
   return json({ threadId, user: userMsg, replies, mode, route: route?.label || null });
+}
+
+/* ---------------- Boardroom: pick the best AI for a project and write its brief ---------------- */
+// The work itself happens in that AI's own app (free tiers); Sobriazar only decides and hands off.
+const BOARD_AIS = ["claude", "gemini", "chatgpt", "grok"];
+const BOARD_NAMES = { claude: "Claude", gemini: "Gemini", chatgpt: "ChatGPT", grok: "Grok" };
+const BOARD_RULES = `You chair a board of four AI assistants. Decide which one should take the project below, then write the brief to hand it to them.
+The members and what each does best:
+- claude: careful writing and editing, coding and building apps or websites, long documents, lesson plans and school materials, nuanced reasoning. Its free use is limited, so give it the work where quality matters most.
+- gemini: anything in Google Docs, Sheets, Slides, Gmail, Drive or YouTube; research with Google Search; very long files and videos; generous free use.
+- chatgpt: making and editing images, quick everyday questions, brainstorming, voice conversations, analyzing spreadsheets or data files; a strong all-rounder.
+- grok: what's happening right now, news, trends, and what people are saying on X; quick and casual.
+Return JSON only, with:
+- title: a short project name (at most 6 words)
+- pick: the best member for this project
+- why: one plain sentence saying why
+- also: the runner-up (a different member)
+- brief: a complete, ready-to-paste prompt written to the picked assistant. Include the goal, every useful detail from the request and the conversation, what the finished product should look like and its format. Say the person wants a finished product they can use right away, not step-by-step instructions, and to ask at most one question only if something essential is missing. Do not mention the board or the other assistants.`;
+async function boardroom(env, { text, files, history, priv }) {
+  const ctx = history.filter((m) => m.role === "user" || m.role === "assistant").slice(-6)
+    .map((m) => `${m.role === "user" ? "Person" : "Answer"}: ${String(m.content || "").slice(0, 1500)}`).join("\n");
+  const req = `${ctx ? `Conversation so far:\n${ctx}\n\n` : ""}Project request:\n${text}${files.length ? `\n(Attached files: ${files.map((f) => f.name).join(", ")})` : ""}`;
+  const student = priv || STUDENT_WORDS.test(text);
+  const clean = (o, via) => {
+    if (!o || !BOARD_AIS.includes(o.pick) || !String(o.brief || "").trim()) return null;
+    const also = BOARD_AIS.includes(o.also) && o.also !== o.pick ? o.also : o.pick === "claude" ? "chatgpt" : "claude";
+    return { title: String(o.title || text).replace(/\s+/g, " ").trim().slice(0, 80) || "New project", pick: o.pick, also, why: String(o.why || "").trim().slice(0, 400), brief: String(o.brief).trim().slice(0, 20000), files: files.length > 0, via,
+      warn: student ? "This mentions students. Take out names and personal details before you hand it off." : null };
+  };
+  // G decides for free; anything about students stays with C.
+  if (env.GEMINI_API_KEY && !student) {
+    try {
+      const { r, j } = await geminiGenerate(env, {
+        contents: [{ role: "user", parts: [{ text: `${BOARD_RULES}\n\n${req}` }] }],
+        generationConfig: {
+          responseMimeType: "application/json", maxOutputTokens: 3000,
+          responseSchema: { type: "OBJECT", properties: { title: { type: "STRING" }, pick: { type: "STRING", enum: BOARD_AIS }, why: { type: "STRING" }, also: { type: "STRING", enum: BOARD_AIS }, brief: { type: "STRING" } }, required: ["title", "pick", "why", "also", "brief"] },
+        },
+      });
+      if (r.ok) {
+        const out = clean(JSON.parse((j.candidates?.[0]?.content?.parts || []).map((p) => p.text || "").join("") || "{}"), null);
+        if (out) return out;
+      }
+    } catch {}
+  }
+  if (!env.ANTHROPIC_API_KEY) throw httpError(503, "The board couldn't meet: G is busy and the C key isn't set up.");
+  const model = env.CLAUDE_FAST_MODEL || "claude-haiku-5-5";
+  const r = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: { "content-type": "application/json", "x-api-key": env.ANTHROPIC_API_KEY, "anthropic-version": "2023-06-01" },
+    body: JSON.stringify({ model, max_tokens: 3000, system: BOARD_RULES + "\nReply with the JSON object only, no other text.", messages: [{ role: "user", content: req }] }),
+  });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) throw new Error(j.error?.message || `The board couldn't meet (${r.status}).`);
+  const inTok = j.usage?.input_tokens || 0, outTok = j.usage?.output_tokens || 0;
+  const [pi, po] = (CLAUDE_PRICES[model] || CLAUDE_PRICES["claude-sonnet-5-5"])(inTok);
+  await recordClaude(env, (inTok * pi + outTok * po) / 1e6);
+  const raw = (j.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
+  let o = null; try { o = JSON.parse(raw.slice(raw.indexOf("{"), raw.lastIndexOf("}") + 1)); } catch {}
+  const out = clean(o, "C");
+  if (!out) throw new Error("The board couldn't agree. Try saying it another way.");
+  return out;
 }
 
 /* ---------------- Auto: choose the source and where to look ---------------- */
